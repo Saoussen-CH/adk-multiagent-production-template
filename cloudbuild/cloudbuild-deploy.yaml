@@ -58,7 +58,7 @@ steps:
         fi
 
         # Flag 1: run tests if agent code, tests, or eval wrappers changed
-        if echo "$CHANGED" | grep -qE '^(customer_support_mas|tests|eval_wrappers)/'; then
+        if echo "$$CHANGED" | grep -qE '^(customer_support_mas|tests|eval_wrappers)/'; then
           echo "Test-relevant files changed — will run tests"
           echo "true" > /workspace/run_tests.txt
         else
@@ -70,7 +70,7 @@ steps:
         if [ "${_DEPLOY_AGENT_ENGINE}" = "true" ]; then
           echo "Agent Engine deploy forced via _DEPLOY_AGENT_ENGINE=true"
           echo "true" > /workspace/deploy_agent_engine.txt
-        elif echo "$CHANGED" | grep -q '^customer_support_mas/'; then
+        elif echo "$$CHANGED" | grep -q '^customer_support_mas/'; then
           echo "Agent code changed — will deploy Agent Engine"
           echo "true" > /workspace/deploy_agent_engine.txt
         else
@@ -79,7 +79,7 @@ steps:
         fi
 
         # Flag 3: build and deploy Docker only if app code changed
-        if echo "$CHANGED" | grep -qE '^(customer_support_mas|backend|frontend)/|^(pyproject\.toml|uv\.lock)'; then
+        if echo "$$CHANGED" | grep -qE '^(customer_support_mas|backend|frontend)/|^(pyproject\.toml|uv\.lock)'; then
           echo "App code changed — will build and deploy"
           echo "true" > /workspace/run_deploy.txt
         else
