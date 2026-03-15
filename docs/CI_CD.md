@@ -310,7 +310,11 @@ After any local tfvars change, sync to GCS so CI picks it up:
 
 ```bash
 make sync-tfvars ENV=dev
+make sync-tfvars ENV=staging
+make sync-tfvars ENV=prod
 ```
+
+> **Important:** Always sync tfvars before pushing a PR that touches `terraform/`. The `terraform-apply` CI trigger reads tfvars from GCS — if GCS is stale, the apply will use outdated values and can destroy/recreate resources incorrectly.
 
 ### Substitution variables
 

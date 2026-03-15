@@ -351,6 +351,7 @@ Shared infrastructure code lives in `terraform/modules/core/`.
 | Agent code changed | `git push`: CI runs + Agent Engine + Cloud Run redeployed |
 | Backend/frontend only | `git push`: tests skipped, Docker + Cloud Run redeployed |
 | Docs/terraform only | `git push`: tests, Docker, and deploy all skipped |
+| **Terraform changes** | Run `make sync-tfvars ENV=dev && make sync-tfvars ENV=staging && make sync-tfvars ENV=prod` before pushing — CI `terraform-apply` reads tfvars from GCS, not from your local file |
 | Force Agent Engine redeploy | `make submit-build DEPLOY_AGENT_ENGINE=true` |
 | Manual build without push | `make submit-build` |
 | Deploy to dev | Push to `main` |

@@ -3,6 +3,7 @@ Root coordinator agent for the customer support system.
 
 This module contains the root agent that routes queries to specialist agents.
 """
+# ci-test: verify full pipeline triggers on agent code changes
 
 from google.adk.agents import Agent
 from google.adk.tools import AgentTool, preload_memory_tool
