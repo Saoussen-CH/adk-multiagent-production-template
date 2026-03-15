@@ -1,312 +1,118 @@
 # CI/CD with Google Cloud Build
 
-The project uses **Google Cloud Build** for continuous integration and deployment. All triggers target the `main` branch. Environment promotions happen via **git tags**, not branch promotions.
+The project uses **Google Cloud Build** for continuous integration and deployment. Seven pipeline configs handle different scenarios across three environments (dev/staging/prod).
 
-## Strategy Overview
-
-```
-Push to main         ──► dev deploy (CI + CD on every push)
-Tag v*.*.*-rc.*      ──► staging: full deploy + load tests + post-deploy eval
-Tag v*.*.*           ──► prod: shadow deploy + post-deploy eval gate + canary enable
-Nightly (00:00 UTC)  ──► regression monitoring + canary promote or rollback
-```
-
-**Key design principles:**
-
-- Single `main` branch: no develop/staging branches to manage.
-- PRs auto-detect changes to `customer_support_mas/` and run integration tests automatically when agent files are touched. No manual trigger needed.
-- Git tags control all environment deployments beyond dev.
-- Every production release creates a **new Agent Engine** resource and a **zero-traffic Cloud Run shadow revision**. Eval runs against the shadow. Canary traffic is enabled only after eval passes.
-- Nightly eval monitors prod for regressions and auto-promotes or rolls back the canary.
-- Terraform is fully decoupled from app deployment.
-
----
-
-## Pipeline Configs
+## Pipeline Overview
 
 ```
-cloudbuild/pr-checks.yaml          Fast CI on every PR to main
-cloudbuild/cloudbuild-deploy.yaml  CI + dev deploy on every push to main
-cloudbuild/release-staging.yaml    Staging release on tag v*.*.*-rc.*
-cloudbuild/release.yaml            Prod canary release on tag v*.*.*
-cloudbuild/cloudbuild-nightly.yaml Nightly regression monitor + canary decision
-cloudbuild/terraform-plan.yaml     Infra plan on every PR to main
-cloudbuild/terraform-apply.yaml    Infra apply on every push to main
+cloudbuild/pr-checks.yaml          App CI: fast eval + lint on every PR
+cloudbuild/cloudbuild.yaml         App CI only (develop push, no deploy)
+cloudbuild/cloudbuild-deploy.yaml  App CI + CD on branch push — auto-detects agent changes
+cloudbuild/cloudbuild-nightly.yaml Full eval + optional post-deploy eval (scheduled/manual)
+cloudbuild/release.yaml            Versioned release on git tag push (v*) — prod only
+cloudbuild/terraform-plan.yaml     Infra: show plan diff on every PR — runs per env in parallel with pr-checks
+cloudbuild/terraform-apply.yaml    Infra: auto-apply on merge — runs per env in parallel with deploy
 ```
 
----
+**Key design principle:** Terraform is fully decoupled from the app deploy. Infrastructure changes propagate automatically — add a resource to `terraform/modules/core/`, open a PR (plan shows the diff), merge (apply runs automatically), promote through `develop → staging → main`.
 
-## Job Dependency Graphs
-
-### pr-checks.yaml (every PR to main)
+### Job Dependency Graph — cloudbuild-deploy.yaml
 
 ```
-detect-agent-changes ─────────────────────────────┐
-install-deps                                       │
-  ├── lint                                         │
-  └── tool-tests                                   │
-      └── unit-tests ◄──────────────────────────── ┘
-          └── integration-tests  (skipped if no customer_support_mas/ changes)
+detect-agent-changes
+└── install-deps
+    ├── lint ─────────────────────────┐
+    └── tool-tests                    │
+        └── unit-tests                │
+            └── integration-tests     │
+                └── docker-build ◄────┘  (waits for integration-tests + lint)
+                    └── docker-push
+                        └── deploy-agent-engine  ← agent first (skipped if no agent changes)
+                            └── deploy-cloud-run ← cloud run second (always runs)
 ```
 
-Profile is auto-set: `fast` if no agent files changed, `standard` if they did.
-
-### cloudbuild-deploy.yaml (push to main, dev)
-
-```
-detect-agent-changes (3 flags: run_tests, deploy_agent_engine, run_deploy)
-get-project-number ──────────────────────────────────┐
-install-deps                                         │
-  ├── lint ─────────────────────────────┐            │
-  └── tool-tests  (skipped if no code)  │            │
-      └── unit-tests                    │            │
-          └── integration-tests         │            │
-              └── docker-build ◄────────┘            │
-                  (skipped if no app code)            │
-                  └── docker-push                    │
-                      └── deploy-agent-engine ◄──────┘
-                          (skipped if no agent changes)
-                          └── deploy-cloud-run (100% traffic)
-                              (skipped if no app code)
-                              └── get-service-url
-                                  └── smoke-test
-                                      └── load-test
-```
-
-### release-staging.yaml (tag v*.*.*-rc.*, staging)
-
-```
-get-project-number ────────────────────────────────┐
-install-deps                                       │
-  ├── lint ──────────────────────────────┐         │
-  └── unit-tests                         │         │
-      └── integration-tests              │         │
-          └── docker-build ◄─────────────┘         │
-              └── docker-push                      │
-                  └── deploy-agent-engine ◄─────────┘
-                      └── deploy-cloud-run (100% traffic)
-                          └── get-service-url
-                              └── smoke-test
-                                  └── load-test
-                                      └── post-deploy-eval
-```
-
-### release.yaml (tag v*.*.*, prod shadow + canary)
+### Job Dependency Graph — release.yaml
 
 ```
 install-deps
-  ├── lint ──────────────────────────────────────┐
-  └── unit-tests                                 │
-      └── integration-tests                      │
-          └── docker-build ◄────────────────────┘
-              └── docker-push
-                  ├── capture-champion  (read current live revision)
-                  ├── get-project-number
-                  └── deploy-agent-engine  (NEW resource, display name = tag)
-                      └── deploy-cloud-run  (--no-traffic --tag sha-SHORT_SHA)
-                          └── get-shadow-url
-                              └── smoke-test  (shadow URL, zero prod users)
-                                  └── post-deploy-eval
-                                      └── enable-canary  (split traffic if eval passes)
-                                          └── cleanup-old-engines  (keep 2 most recent)
+├── lint ───────────────────────────┐
+└── unit-tests (standard profile)  │
+    └── docker-build ◄─────────────┘  (tagged: $TAG_NAME + $COMMIT_SHA + latest)
+        └── docker-push
+            └── deploy-agent-engine  ← always deploys (display name: customer-support-multiagent-vX.Y.Z)
+                └── deploy-cloud-run ← uses $TAG_NAME image (not $COMMIT_SHA)
+                    └── smoke-test
 ```
 
-### cloudbuild-nightly.yaml (regression monitor + canary decision)
+`lint` and `unit-tests` run in parallel after `install-deps`. CD steps only start after **all** CI steps pass. `deploy-agent-engine` must complete before `deploy-cloud-run` so Cloud Run always talks to the already-updated agent.
 
-```
-install-deps
-  └── post-deploy-eval  (eval prod agent, capture exit code)
-      └── promote-or-rollback
-            pass N nights: promote canary to 100%, reset counter
-            regression:    rollback to champion, reset counter, fail build
-```
+## Trigger Configuration
 
----
+### App triggers (per environment)
 
-## Triggers
+| Trigger | Event | Envs | Config | `_EVAL_PROFILE` | Agent Engine deploy |
+|---------|-------|------|--------|-----------------|---------------------|
+| `ci-pull-request` | PR to env branch | dev/staging/prod | `cloudbuild/pr-checks.yaml` | `fast` | — |
+| `ci-cd-push-develop` | Push to `develop` | dev | `cloudbuild/cloudbuild-deploy.yaml` | `standard` | auto-detected |
+| `ci-cd-push-staging` | Push to `staging` | staging | `cloudbuild/cloudbuild-deploy.yaml` | `standard` | auto-detected |
+| `ci-cd-push-main` | Push to `main` | prod | `cloudbuild/cloudbuild-deploy.yaml` | `standard` | auto-detected |
+| `ci-manual` | Manual / nightly | prod | `cloudbuild/cloudbuild-nightly.yaml` | `full` | — |
+| Cloud Scheduler | Midnight UTC | prod | `cloudbuild/cloudbuild-nightly.yaml` | `full` | — |
+| `release` | Git tag `v*.*.*` | prod | `cloudbuild/release.yaml` | `standard` | always |
 
-### App triggers
+### Terraform triggers (per environment, run in parallel with app triggers)
 
-| Trigger | Event | Environment | Config | `_EVAL_PROFILE` | Integration tests |
-|---------|-------|-------------|--------|-----------------|------------------|
-| `ci-pull-request` | PR to `main` | read-only | `pr-checks.yaml` | auto (`fast`/`standard`) | Auto when `customer_support_mas/` changed |
-| `ci-cd-push-main` | Push to `main` | dev | `cloudbuild-deploy.yaml` | `standard` | Yes (when relevant files changed) |
-| `release-staging` | Tag `v*.*.*-rc.*` | staging | `release-staging.yaml` | `standard` | Yes (always) |
-| `release` | Tag `v*.*.*` | prod | `release.yaml` | `standard` | Yes (always) |
-| `ci-manual` | Manual or nightly | prod | `cloudbuild-nightly.yaml` | `full` | No |
-| Cloud Scheduler | Midnight UTC | prod | `cloudbuild-nightly.yaml` | `full` | No |
+| Trigger | Event | Envs | Config |
+|---------|-------|------|--------|
+| `terraform-plan` | PR to env branch | dev/staging/prod | `cloudbuild/terraform-plan.yaml` |
+| `terraform-apply` | Push to env branch | dev/staging/prod | `cloudbuild/terraform-apply.yaml` |
 
-### Terraform triggers (run in parallel with app triggers)
+**Total triggers per project:** dev=4, staging=4, prod=6
 
-| Trigger | Event | Config |
-|---------|-------|--------|
-| `terraform-plan` | PR to `main` | `cloudbuild/terraform-plan.yaml` |
-| `terraform-apply` | Push to `main` | `cloudbuild/terraform-apply.yaml` |
-
----
-
-## PR Change Detection
-
-`pr-checks.yaml` runs a `detect-agent-changes` step that diffs the PR branch against `origin/main`. Based on what changed, it sets two files that downstream steps read:
-
-| Files changed in PR | `eval_profile.txt` | `run_agent_tests.txt` | Result |
-|---------------------|--------------------|-----------------------|--------|
-| `customer_support_mas/` touched | `standard` | `true` | Full CI: tool-tests + unit-tests (standard) + integration-tests |
-| Only docs, terraform, scripts | `fast` | `false` | Lite CI: tool-tests + unit-tests (fast, Rouge-1 only) |
-
-Integration tests run automatically on any PR that touches agent logic. No manual trigger required.
-
----
-
-## Event to Trigger Mapping
+### Full event → trigger mapping
 
 | Event | Triggers that fire |
-|-------|-------------------|
-| PR opened/updated against `main` | `ci-pull-request` (auto-detects depth) + `terraform-plan` |
-| Push to `main` | `ci-cd-push-main` (dev deploy) + `terraform-apply` |
-| Tag `v*.*.*-rc.*` | `release-staging` (staging deploy + eval) |
-| Tag `v*.*.*` | `release` (prod shadow deploy + canary enable) |
-| Midnight UTC | Cloud Scheduler fires `ci-manual` (regression monitor) |
-
----
-
-## Production Canary Release
-
-### Creating a release
-
-```bash
-# 1. Validate on staging first
-git tag v1.2.0-rc.1
-git push origin v1.2.0-rc.1
-# Wait for release-staging to pass
-
-# 2. Cut the prod release
-git tag v1.2.0
-git push origin v1.2.0
-```
-
-The `release` trigger runs:
-
-1. Lint + unit tests at `standard` eval profile
-2. Docker image built and pushed with three tags: `v1.2.0`, `$COMMIT_SHA`, `latest`
-3. Champion Cloud Run revision captured (currently live revision)
-4. New Agent Engine deployed: display name `customer-support-multiagent-v1.2.0`, new resource ID
-5. Cloud Run shadow revision deployed: `--no-traffic --tag sha-SHORT_SHA --revision-suffix sha-SHORT_SHA`
-6. Smoke tests run against the shadow revision URL (no prod traffic affected)
-7. Post-deploy eval runs against the new Agent Engine via `eval_vertex.py`
-8. If eval passes: traffic split set to `(100 - CANARY_PCT)%` champion / `CANARY_PCT%` canary (default 10%)
-9. If eval fails: build fails, shadow stays at 0% traffic
-
-### Nightly decision gate
-
-Nightly eval runs against the prod Agent Engine and compares scores against the stored GCS baseline:
-
-- **No regression detected**: baseline updated, nightly passes.
-- **Regression detected (score drop > `_REGRESSION_THRESHOLD`, percentage-based)**: nightly exits 1, team alerted via Cloud Build failure notification.
-
-Canary promotion and rollback happen **automatically**:
-
-| Outcome | Action |
-|---------|--------|
-| Eval passes, canary live, pass count < threshold | Increment pass counter in GCS, wait for next night |
-| Eval passes, canary live, pass count >= threshold | Promote canary to 100%, reset counter |
-| Eval passes, no canary | Update baseline, pass |
-| Regression detected, canary live | Roll back champion to 100%, reset counter, exit 1 |
-| Regression detected, no canary | Reset counter, exit 1 |
-
-The promotion threshold is `_CANARY_PROMOTE_THRESHOLD` (default: 2 consecutive passing nights).
-
-Pass counter stored at: `$_STAGING_BUCKET/baselines/canary-pass-count.json`
-
-**Manual overrides** (emergency use):
-
-```bash
-# Force promote canary to 100%
-gcloud run services update-traffic customer-support-app \
-  --to-revisions=CANARY_REVISION=100 \
-  --region=us-central1 --project=YOUR_PROD_PROJECT
-
-# Force rollback to champion
-gcloud run services update-traffic customer-support-app \
-  --to-revisions=CHAMPION_REVISION=100 \
-  --region=us-central1 --project=YOUR_PROD_PROJECT
-
-# Point Cloud Run back to old Agent Engine after rollback
-gcloud run services update customer-support-app \
-  --update-env-vars="AGENT_ENGINE_RESOURCE_NAME=projects/.../reasoningEngines/OLD_ID" \
-  --region=us-central1 --project=YOUR_PROD_PROJECT
-
-# Check current traffic split
-gcloud run services describe customer-support-app \
-  --region=us-central1 --project=YOUR_PROD_PROJECT \
-  --format="value(status.traffic)"
-```
-
----
-
-## Staging: Pre-Prod Eval Gate
-
-Staging (`ma-css-staging`) uses rc tags to validate the release candidate before the prod tag:
-
-```bash
-git tag v1.2.0-rc.1
-git push origin v1.2.0-rc.1
-```
-
-`release-staging.yaml` runs: full deploy + load tests + post-deploy eval. No shadow (staging can absorb full rollout). If it passes, the prod tag is safe to cut.
-
----
-
-## Agent Engine Versioning
-
-Every production git tag creates a **new** Agent Engine resource:
-
-| Tag | Agent Engine | Cloud Run status |
-|-----|-------------|-----------------|
-| `v1.0.0` | `reasoningEngines/111` | decommissioned (old champion) |
-| `v1.1.0` | `reasoningEngines/222` | champion (90% traffic) |
-| `v1.2.0` | `reasoningEngines/333` | canary (10% traffic) |
-
-**Full version traceability:**
-
-| Artifact | Version identifier |
-|----------|--------------------|
-| Git source | Tag `v1.2.0` + commit SHA |
-| Docker image | `customer-support-app:v1.2.0` in Artifact Registry |
-| Agent Engine | `reasoningEngines/333` with display name `customer-support-multiagent-v1.2.0` |
-| Cloud Run | Image pinned to `v1.2.0`, revision tagged `sha-SHORT_SHA` |
-
----
+|---|---|
+| PR → `develop` | `ci-pull-request` (fast eval) + `terraform-plan` (infra diff) |
+| Merge → `develop` | `ci-cd-push-develop` (deploy to dev) + `terraform-apply` (infra apply to dev) |
+| PR → `staging` | `ci-pull-request` + `terraform-plan` |
+| Merge → `staging` | `ci-cd-push-staging` (deploy to staging) + `terraform-apply` (infra apply to staging) |
+| PR → `main` | `ci-pull-request` + `terraform-plan` |
+| Merge → `main` | `ci-cd-push-main` (deploy to prod) + `terraform-apply` (infra apply to prod) |
+| Git tag `v*` | `release` (versioned deploy to prod) |
 
 ## Terraform CI/CD
 
-Infrastructure changes are managed separately from app code.
+Infrastructure changes are managed separately from app code and propagate automatically through the environment promotion flow.
 
 ### How it works
 
-1. Modify a resource in `terraform/modules/core/` (shared across all envs)
-2. Open a PR against `main`: `terraform-plan` fires and posts the diff to build logs
-3. Merge the PR: `terraform-apply` fires and applies changes to dev
-4. Run `make infra-up ENV=staging` and `make infra-up ENV=prod` to promote to other environments
+1. Add or modify a resource in `terraform/modules/core/` (shared across all envs)
+2. Open a PR → `terraform-plan` fires in the target env's project and posts the diff to build logs
+3. Reviewer approves the plan, merges the PR
+4. `terraform-apply` fires automatically and applies the changes to that environment
+5. Promote `develop → staging → main` to apply the same change to staging and prod
+
+**Result:** A new Cloud Run service, IAM binding, Firestore index, or any other GCP resource added once to the module lands in all three environments without any manual `terraform apply`.
 
 ### Remote state
 
-Terraform state is stored in GCS:
+Terraform state is stored in GCS (not local files) so Cloud Build can read and write it:
 
 ```
 gs://{project_id}-tf-state/customer-support-mas/{env}/   ← state files
 gs://{project_id}-tf-state/tfvars/terraform.tfvars       ← env config (gitignored locally)
 ```
 
-Bootstrap the state bucket once per environment:
+Bootstrap the state bucket once per environment (one-time manual step):
 
 ```bash
-make bootstrap-tfstate ENV=dev
+make bootstrap-tfstate ENV=dev      # creates bucket + uploads tfvars
 make bootstrap-tfstate ENV=staging
 make bootstrap-tfstate ENV=prod
 ```
 
-After any local tfvars change, sync to GCS so CI picks it up:
+After any local tfvars change (e.g. adding `agent_engine_resource_name`), sync it back to GCS so CI picks it up:
 
 ```bash
 make sync-tfvars ENV=dev
@@ -315,133 +121,162 @@ make sync-tfvars ENV=dev
 ### Substitution variables
 
 | Variable | Description | Example |
-|----------|-------------|---------|
+|---|---|---|
 | `_ENV_DIRECTORY` | Path to environment dir | `terraform/environments/dev` |
 | `_ENVIRONMENT` | Environment name | `dev` |
 | `_TF_STATE_BUCKET` | GCS bucket for state + tfvars | `css-mas-dev-tf-state` |
 
+`_TF_STATE_BUCKET` defaults to `{PROJECT_ID}-tf-state` if not set in the trigger.
+
 ---
 
-## Auto-detection of Changes
+## Release Pipeline
 
-`cloudbuild-deploy.yaml` runs a `detect-agent-changes` step on every push to `main`. It writes three flags based on `git diff HEAD~1 HEAD`:
+### Creating a release
 
-**`run_tests.txt`** — controls whether tests run:
-- `true` if `customer_support_mas/`, `tests/`, or `eval_wrappers/` changed
-- `false` otherwise — tool-tests, unit-tests, and integration-tests are all skipped
-
-**`deploy_agent_engine.txt`** — controls whether Agent Engine is redeployed:
-- `true` if `customer_support_mas/` changed (or `_DEPLOY_AGENT_ENGINE=true` is forced)
-- `false` otherwise — Agent Engine deploy is skipped
-
-**`run_deploy.txt`** — controls whether Docker build and Cloud Run deploy run:
-- `true` if `customer_support_mas/`, `backend/`, `frontend/`, `pyproject.toml`, or `uv.lock` changed
-- `false` otherwise — docker-build, docker-push, deploy-cloud-run, smoke-test are all skipped
-
-| Files changed | Tests | Agent Engine | Docker + Cloud Run |
-|---------------|-------|--------------|-------------------|
-| `customer_support_mas/` | Yes | Yes | Yes |
-| `backend/` or `frontend/` | No | No | Yes |
-| `tests/` or `eval_wrappers/` | Yes | No | No |
-| `terraform/`, `docs/`, `scripts/` | No | No | No |
-
-Force Agent Engine redeploy regardless of changed files:
+Tag the commit you want to release and push the tag. Cloud Build fires automatically on the prod project (`css-mas-prod`):
 
 ```bash
-make submit-build DEPLOY_AGENT_ENGINE=true
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The `release` trigger (`cloudbuild/release.yaml`) runs:
+
+1. Lint + unit tests at `standard` eval profile (stronger gate than regular CI)
+2. Docker image built and pushed with **three tags**: `v1.0.0`, `$COMMIT_SHA`, `latest`
+3. Agent Engine deployed — display name set to `customer-support-multiagent-v1.0.0`
+4. Cloud Run deployed using the **versioned image tag** (`v1.0.0`, not `$COMMIT_SHA`)
+5. Smoke tests run against the live Cloud Run URL
+
+### Rollback
+
+Because Cloud Run is pinned to the versioned image tag, rollback is a single `gcloud` command — no rebuild required:
+
+```bash
+gcloud run deploy customer-support-app \
+  --image=us-central1-docker.pkg.dev/css-mas-prod/customer-support/customer-support-app:v0.0.9 \
+  --region=us-central1 \
+  --project=css-mas-prod
 ```
 
 ---
 
-## Smoke Tests
+## Agent Engine Versioning Strategy
 
-Smoke tests run at the end of every deployment in all environments. In prod releases they run against the shadow revision URL before any traffic is switched.
+Vertex AI Agent Engine (Reasoning Engine) has no native concept of tags or versions — each deployment either creates a new resource or updates the existing one. Three strategies exist:
 
-**6 checks in `tests/smoke/test_smoke.py`:**
+### Option 1 — Display name label (metadata only)
 
-1. Health endpoint returns 200
-2. Agent responds to a basic message
-3. Product search tool is reachable
-4. Order tracking tool is reachable
-5. Model Armor filters unsafe prompts
-6. Session continuity (follow-up messages use the same session)
+Set the display name to include the version: `customer-support-multiagent-v1.0.0`. Visible in the GCP Console and in Cloud Logging, but not enforceable. The resource name stays stable, so Cloud Run needs no change on updates.
 
-**Running locally:**
+### Option 2 — One resource per major version
+
+Deploy a new reasoning engine per release tag, keep the old one running:
+
+- `reasoningEngines/111` = `v1.0.0`
+- `reasoningEngines/222` = `v2.0.0`
+
+**Pros:** Instant rollback by pointing Cloud Run's `AGENT_ENGINE_RESOURCE_NAME` env var to the old resource name. No redeploy needed.
+
+**Cons:** Each idle reasoning engine incurs ongoing compute and storage costs. Managing the lifecycle (which versions to keep, when to delete old ones) adds operational overhead. For a system deployed across dev/staging/prod, this multiplies the idle cost across all environments.
+
+**Why we didn't choose this:** The cost-to-benefit ratio is poor for this project. Cloud Run rollback (Option 3) achieves the same outcome for the app layer at zero extra cost. Agent Engine changes are also relatively infrequent — most releases only change the Cloud Run image (backend/frontend). When the agent code does change, the display name captures the version for traceability.
+
+### Option 3 — Git tag + versioned Docker image (chosen)
+
+The real versioning lives in **git tags** and **Artifact Registry image tags**. This is what `release.yaml` implements:
+
+- Git tag `v1.0.0` → Docker image tagged `v1.0.0` in Artifact Registry
+- Agent Engine display name set to `customer-support-multiagent-v1.0.0` (traceability)
+- Cloud Run deployed with `image:v1.0.0` (not `image:latest`)
+- Rollback = redeploy the previous tagged Cloud Run image (see above)
+
+**Full version traceability per deployment:**
+
+| Artifact | Version identifier |
+|---|---|
+| Git source | Tag `v1.0.0` + commit SHA |
+| Docker image | `customer-support-app:v1.0.0` in Artifact Registry |
+| Agent Engine | Display name `customer-support-multiagent-v1.0.0` |
+| Cloud Run | Image pinned to `v1.0.0` |
+
+---
+
+### Auto-detection of agent changes
+
+`cloudbuild-deploy.yaml` has a `detect-agent-changes` step that runs first on every push to `main`:
 
 ```bash
-uv sync --group dev
-CLOUD_RUN_URL=https://your-cloud-run-url pytest tests/smoke/ -v
+git diff --name-only HEAD~1 HEAD -- customer_support_agent/
 ```
 
----
+- If `customer_support_agent/` files changed → writes `true` → Agent Engine is redeployed
+- Otherwise → writes `false` → only Cloud Run is deployed
 
-## Load Tests
+`_DEPLOY_AGENT_ENGINE=true` can still be set explicitly on the trigger (or via `make submit-build DEPLOY_AGENT_ENGINE=true`) to force an Agent Engine deploy regardless of which files changed.
 
-Load tests run in dev (push to main) and staging (rc tag releases).
+### Skipping builds entirely with `[skip ci]`
 
-**Tool:** [Locust](https://locust.io/): `tests/load/locustfile.py`
+For commits that change nothing deployable — docs, Terraform, CI config itself — you can prevent all triggers from running by including `[skip ci]` or `[ci skip]` anywhere in the commit message:
 
-**Configuration:** 5 concurrent users, 2-minute run, `/health` endpoint only (infrastructure availability, not LLM quality)
+```bash
+git commit -m "docs: update CI_CD.md [skip ci]"
+git commit -m "[skip ci] fix typo in README"
+```
 
-**SLO thresholds** (`tests/load/check_slos.py`):
+Cloud Build checks the commit message of the HEAD commit on the pushed branch. If it contains `[skip ci]` or `[ci skip]`, **all** triggered builds for that push are skipped.
 
-| SLO | Threshold |
-|-----|-----------|
-| p95 response time | < 10 s |
-| p99 response time | < 20 s |
-| Error rate | < 5 % |
-| Requests per second | > 0.5 |
+**When to use each mechanism:**
 
----
+| Scenario | Mechanism |
+|----------|-----------|
+| Working on a feature branch | Push normally → `ci-pull-request` fires (fast checks + terraform plan) |
+| Merging to `develop` | Push normally → `ci-cd-push-develop` + `terraform-apply` fire in parallel |
+| Agent logic changed, merging to `main` | Push normally → auto-detects agent change → deploys Agent Engine + Cloud Run |
+| Non-agent code, merging to `main` | Push normally → no agent change detected → deploys Cloud Run only |
+| New Terraform resource added | Push normally → plan on PR, apply on merge — propagates to all envs via promotion |
+| Docs / CI config only | Add `[skip ci]` to commit message → no build runs |
 
-## Eval Profiles
+### Eval Profile Details
 
 | Profile | Unit Metrics | Integration Metrics | Cost |
-|---------|-------------|---------------------|------|
+|---------|-------------|-------------------|------|
 | `fast` | Rouge-1 response match | Rouge-1 response match | Free |
 | `standard` | + tool name F1 (custom metric) | + rubric-based LLM judge | Low |
 | `full` | + LLM-as-judge response quality | + LLM-as-judge response quality | Higher |
 
 Profile configs: `tests/eval_configs/{unit,integration}/{fast,standard,full}.json`
 
-Post-deploy eval configs: `tests/eval_configs/post_deploy/{standard,full}.json`
-
----
-
 ## CI Steps
 
 ### 1. install-deps
-Installs Python dependencies via `uv sync --frozen` into `/workspace/.venv` (shared across all steps). Each step activates with `export PATH="/workspace/.venv/bin:$PATH"`.
+Installs Python dependencies via `uv sync --frozen` into `/workspace/.venv` (shared across all steps via Cloud Build's `/workspace` volume). Each subsequent step activates the venv with `export PATH="/workspace/.venv/bin:$PATH"`.
 
 ### 2. lint
-Runs `ruff check customer_support_mas/ --ignore=E501`. PR checks also run `ruff format --check`.
+Runs `ruff check customer_support_agent/ --ignore=E501`.
+
+`pr-checks.yaml` also runs `ruff format customer_support_agent/ --check` to catch formatting issues (mirrors `.pre-commit-config.yaml`).
 
 ### 3. tool-tests
-Pure Python tests with mocked Firestore: no LLM calls, no cost.
+Pure Python tests with mocked Firestore — no LLM calls, no cost.
 ```
 pytest tests/unit/test_tools.py tests/unit/test_mock_rag.py tests/unit/test_refund_standalone.py
 ```
-Skipped on push-to-main if no changes in `customer_support_mas/`, `tests/`, or `eval_wrappers/`.
 
 ### 4. unit-tests
-Agent evaluation via ADK `AgentEvaluator`: calls Vertex AI Gemini.
+Agent evaluation via ADK `AgentEvaluator` — calls Vertex AI Gemini.
 ```
 pytest tests/unit/test_agent_eval_ci.py
 ```
-Skipped on push-to-main if no relevant files changed.
 
 ### 5. integration-tests
 Multi-agent orchestration evaluation through the root agent.
 ```
 pytest tests/integration/test_integration_eval_ci.py
 ```
-- On PRs: runs automatically when `customer_support_mas/` files are in the diff (standard profile).
-- On push to main: runs when `customer_support_mas/`, `tests/`, or `eval_wrappers/` changed.
-- On staging and prod release tags: always runs (required gate before Docker build).
 
----
-
-## CD Steps (cloudbuild-deploy.yaml, push to main / dev)
+## CD Steps (cloudbuild-deploy.yaml only)
 
 ### 6. docker-build
 Multi-stage Docker build (`backend/Dockerfile`): React frontend (Node 20) + FastAPI backend (Python 3.11). Tagged with `$COMMIT_SHA` and `latest`.
@@ -450,65 +285,36 @@ Multi-stage Docker build (`backend/Dockerfile`): React frontend (Node 20) + Fast
 Pushes to Artifact Registry at `$_REGION-docker.pkg.dev/$PROJECT_ID/customer-support/customer-support-app`.
 
 ### 8. deploy-agent-engine (conditional)
-Runs `deployment/deploy.py --action deploy` when `_DEPLOY_AGENT_ENGINE=true`. Uses update-or-create logic (same display name for dev).
+Runs `deployment/deploy.py --action deploy` when `_DEPLOY_AGENT_ENGINE=true`. Receives the GCS staging bucket via the `_STAGING_BUCKET` substitution variable. Uses update-or-create logic: if an Agent Engine with `AGENT_ENGINE_DISPLAY_NAME` already exists it is updated in place (same resource name, Cloud Run needs no change); otherwise a new engine is created and its resource name is written to `/workspace/agent_engine_resource_name.txt` so the next step can read it.
 
 ### 9. deploy-cloud-run
-Dev: deploys with 100% traffic to new revision. Prod (release.yaml): shadow with `--no-traffic --tag sha-SHORT_SHA`.
-
-### 10. smoke-test
-Runs `pytest tests/smoke/test_smoke.py` against the deployed (or shadow) service URL.
-
-### 11. load-test
-Runs Locust for 2 minutes, then `tests/load/check_slos.py` to assert SLO thresholds.
-
----
-
-## Release CD Steps (release.yaml only)
-
-### 12. capture-champion
-Reads the currently live Cloud Run revision name. Written to `/workspace/champion_revision.txt` for use by `enable-canary`.
-
-### 13. deploy-agent-engine
-Always creates a new Agent Engine resource with `AGENT_ENGINE_DISPLAY_NAME=customer-support-multiagent-$TAG_NAME`. Resource name written to `/workspace/agent_engine_resource_name.txt`.
-
-### 14. deploy-cloud-run (shadow)
-Deploys with `--no-traffic --tag sha-SHORT_SHA --revision-suffix sha-SHORT_SHA`. Shadow revision points to the new Agent Engine via `AGENT_ENGINE_RESOURCE_NAME` env var.
-
-### 15. get-shadow-url
-Gets the tagged revision URL from Cloud Run service describe. Written to `/workspace/shadow_url.txt`.
-
-### 16. smoke-test (shadow)
-Runs smoke tests against the shadow URL. No prod users affected.
-
-### 17. post-deploy-eval
-Runs `tests/eval_vertex.py --agent-engine-id NEW_ENGINE --custom-inference --output /workspace/eval_scores.json`. Exits 0 if thresholds pass, 1 if they fail (blocks enable-canary).
-
-### 18. enable-canary
-Runs only if post-deploy-eval passed. Splits Cloud Run traffic between champion and canary revisions using `_CANARY_TRAFFIC_PERCENT` (default 10%). On first deploy (no champion): promotes canary to 100%.
-
----
+Deploys the image to Cloud Run. Reads `AGENT_ENGINE_RESOURCE_NAME` from `/workspace/agent_engine_resource_name.txt` (written by step 8 on first create) or falls back to the `_AGENT_ENGINE_RESOURCE_NAME` substitution variable (used on updates where the resource name is unchanged). Sets `ENVIRONMENT=production` to enable structured JSON logging.
 
 ## Nightly Pipeline (cloudbuild-nightly.yaml)
 
-Evaluates the prod Agent Engine and compares against a GCS-stored baseline score:
-
-- **First run**: saves current scores as baseline, passes.
-- **No regression**: updates baseline, passes.
-- **Regression detected (score drop > `_REGRESSION_THRESHOLD`, default 0.05)**: exits 1.
-
-The nightly baseline is stored at `$_STAGING_BUCKET/baselines/nightly-baseline.json`.
+Runs all CI steps with `_EVAL_PROFILE=full` (all metrics including LLM-as-judge). Optionally runs post-deploy evaluation against a deployed Agent Engine.
 
 ```bash
-# Run manually
+# Full eval only (default — post-deploy eval skipped)
 gcloud builds triggers run ci-manual \
   --project=YOUR_PROJECT_ID --region=us-central1 --branch=main
+
+# Full eval + post-deploy eval against a live Agent Engine
+# _STAGING_BUCKET is required when _RUN_POST_DEPLOY_EVAL=true:
+#   - eval HTML report is uploaded to gs://BUCKET/eval-reports/eval-TIMESTAMP.html
+#   - the GCS URI is recorded as a param in the Vertex AI Experiments run
+gcloud builds triggers run ci-manual \
+  --project=YOUR_PROJECT_ID --region=us-central1 --branch=main \
+  --substitutions="_RUN_POST_DEPLOY_EVAL=true,_AGENT_ENGINE_ID=YOUR_ENGINE_ID,_STAGING_BUCKET=gs://YOUR_BUCKET"
 ```
 
----
+`_RUN_POST_DEPLOY_EVAL`, `_AGENT_ENGINE_ID`, and `_STAGING_BUCKET` default to `false`, `""`, and `""` in the trigger definition — override them at run time only when needed.
 
 ## Setup
 
-### Quick Start (Terraform: recommended)
+### Quick Start (Terraform — recommended)
+
+All infrastructure is managed by Terraform in `terraform/modules/core/` (shared module) with per-environment configs in `terraform/environments/{dev,staging,prod}/`. State is stored remotely in GCS.
 
 ```bash
 # 1. Copy and fill in your values for each environment
@@ -516,16 +322,16 @@ cp terraform/environments/dev/terraform.tfvars.example \
    terraform/environments/dev/terraform.tfvars
 $EDITOR terraform/environments/dev/terraform.tfvars
 
-# 2. Create GCS state bucket (once per env)
+# 2. Create GCS state bucket (once per env — stores state + tfvars for CI)
 make bootstrap-tfstate ENV=dev
 
 # 3. Bootstrap infrastructure
-make infra-up ENV=dev
+make infra-up ENV=dev   # terraform init + apply
 
-# 4. Connect GitHub repo (one-time, browser OAuth)
+# 4. Connect GitHub repo (one-time, browser OAuth — cannot be automated)
 #    Cloud Console → Cloud Build → Repositories (2nd gen) → Create host connection → GitHub
 #    Then: Link Repository → select your repo
-#    Set github_connected=true, cloudbuild_connection_name, cloudbuild_repo_name in terraform.tfvars
+#    Then set github_connected=true, cloudbuild_connection_name, cloudbuild_repo_name in terraform.tfvars
 #    Then: make sync-tfvars ENV=dev && make infra-up ENV=dev
 
 # 5. Seed Firestore and deploy
@@ -536,19 +342,17 @@ make deploy-cloud-run
 
 See [../terraform/](../terraform/) for full Terraform configuration and [DEPLOYMENT.md](./DEPLOYMENT.md) for the complete multi-environment setup walkthrough.
 
-### Branch Protection Rules
+### Alternative: Shell Scripts
 
-Protect `main` so a failing check blocks the merge button:
+```bash
+./scripts/setup-cloud-build.sh YOUR_PROJECT_ID us-central1 YOUR_STAGING_BUCKET
+```
 
-**GitHub → repo → Settings → Branches → Add branch protection rule** for `main`:
-
-| Setting | Value |
-|---------|-------|
-| Branch name pattern | `main` |
-| Require status checks to pass | enabled |
-| Required checks | `ci-pull-request`, `terraform-plan` |
-| Require branches to be up to date | enabled |
-| Do not allow bypassing | enabled |
+This script:
+1. Grants IAM roles to the Cloud Build service account
+2. Creates the Artifact Registry repository
+3. Enables required APIs
+4. Prints trigger creation commands
 
 ### IAM Roles Required
 
@@ -560,12 +364,12 @@ The Cloud Build service account (`PROJECT_NUMBER@cloudbuild.gserviceaccount.com`
 | `roles/aiplatform.user` | Vertex AI Gemini API |
 | `roles/aiplatform.admin` | Agent Engine deployment |
 | `roles/artifactregistry.writer` | Push Docker images |
-| `roles/run.admin` | Cloud Run deployment + traffic management |
+| `roles/run.admin` | Cloud Run deployment |
 | `roles/iam.serviceAccountUser` | Act as Cloud Run service account |
-| `roles/storage.objectAdmin` | Staging bucket + tfstate bucket + baseline JSON |
-| `roles/editor` (or targeted) | `terraform-apply`: create/update GCP resources |
+| `roles/storage.objectAdmin` | Staging bucket + tfstate bucket access |
+| `roles/editor` (or targeted) | `terraform-apply` — create/update GCP resources |
 
-All roles are granted by Terraform (`terraform/modules/core/iam.tf`). No service account key file is needed.
+All roles are granted by Terraform (`terraform/modules/core/iam.tf`). No service account key file is needed — Cloud Build runs natively on GCP with IAM.
 
 ### Creating Triggers
 
@@ -573,24 +377,73 @@ All roles are granted by Terraform (`terraform/modules/core/iam.tf`). No service
 > 1. Create a 2nd gen host connection: Cloud Console → Cloud Build → **Repositories (2nd gen)** → **Create host connection** → GitHub → name it `github-connection`
 > 2. Link the repository: **Link Repository** → select `Saoussen-CH/customer-support-mas-ai`
 > 3. Get the slugified repo name: `gcloud builds repositories list --connection=github-connection --region=us-central1`
-> 4. Set `github_connected=true`, `cloudbuild_connection_name`, and `cloudbuild_repo_name` in `terraform/environments/*/terraform.tfvars`, then run `make infra-up`
+> 4. Set `github_connected=true`, `cloudbuild_connection_name`, and `cloudbuild_repo_name` in `terraform/terraform.tfvars`, then run `make infra-up`
 >
-> **Important:** Cloud Build 2nd gen triggers require `service_account` in the API request. Terraform handles this automatically.
+> **Important:** Cloud Build 2nd gen triggers require `service_account` in the API request — omitting it causes a silent `400 INVALID_ARGUMENT`. Terraform handles this automatically.
 
-#### Cloud Console: quick reference
+#### Cloud Console — quick reference
 
-| Field | ci-pull-request | ci-cd-push-main | release-staging | release | ci-manual |
-|-------|----------------|-----------------|-----------------|---------|-----------|
-| **Name** | `ci-pull-request` | `ci-cd-push-main` | `release-staging` | `release` | `ci-manual` |
-| **Event** | Pull request | Push to branch | Push tag | Push tag | Manual |
-| **Branch / Tag** | `^main$` | `^main$` | `^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+` | `^v[0-9]+\.[0-9]+\.[0-9]+$` | `main` |
-| **Build config** | `cloudbuild/pr-checks.yaml` | `cloudbuild/cloudbuild-deploy.yaml` | `cloudbuild/release-staging.yaml` | `cloudbuild/release.yaml` | `cloudbuild/cloudbuild-nightly.yaml` |
-| **_STAGING_BUCKET** | | `gs://YOUR_BUCKET` | `gs://YOUR_BUCKET` | `gs://YOUR_BUCKET` | `gs://YOUR_BUCKET` |
-| **_AGENT_ENGINE_RESOURCE_NAME** | | `projects/.../reasoningEngines/ID` | | `projects/.../reasoningEngines/ID` | `projects/.../reasoningEngines/ID` |
-| **_CANARY_TRAFFIC_PERCENT** | | | | `10` | |
-| **_EVAL_DATASET** | | | `tests/post_deploy/datasets/post_deploy_cases.json` | `tests/post_deploy/datasets/post_deploy_cases.json` | |
+For each trigger: Cloud Build → Triggers → **Create Trigger** → fill in the fields below → **Save**.
 
-#### Trigger: Push to `main` (dev, CI + CD)
+| Field | ci-pull-request | ci-push-develop | ci-cd-push-main | ci-manual | release |
+|---|---|---|---|---|---|
+| **Name** | `ci-pull-request` | `ci-push-develop` | `ci-cd-push-main` | `ci-manual` | `release` |
+| **Region** | `us-central1` | `us-central1` | `us-central1` | `us-central1` | `us-central1` |
+| **Event** | Pull request | Push to branch | Push to branch | Manual invocation | Push tag |
+| **Repository (2nd gen)** | `Saoussen-CH-customer-support-mas-ai` | same | same | same | same |
+| **Branch / Tag** | `^main$` | `^develop$` | `^main$` | `main` | `^v[0-9]+\.[0-9]+\.[0-9]+` |
+| **Build config** | `cloudbuild/pr-checks.yaml` | `cloudbuild/cloudbuild.yaml` | `cloudbuild/cloudbuild-deploy.yaml` | `cloudbuild/cloudbuild-nightly.yaml` | `cloudbuild/release.yaml` |
+| **Service account** | `PROJECT_NUMBER@cloudbuild.gserviceaccount.com` | same | same | same | same |
+| **_EVAL_PROFILE** | — | `standard` | `standard` | `full` | `standard` |
+| **_GOOGLE_CLOUD_LOCATION** | `us-central1` | `us-central1` | `us-central1` | `us-central1` | `us-central1` |
+| **_STAGING_BUCKET** | — | — | `gs://YOUR_STAGING_BUCKET` | `gs://YOUR_STAGING_BUCKET` | `gs://YOUR_STAGING_BUCKET` |
+| **_AGENT_ENGINE_RESOURCE_NAME** | — | — | `projects/.../reasoningEngines/ID` | — | `projects/.../reasoningEngines/ID` |
+
+Triggers use the **2nd gen Cloud Build API** (`repositoryEventConfig`). Use `gcloud builds triggers import` with inline YAML — the older `gcloud builds triggers create github` flags (`--repo-name`, `--repo-owner`) do not work with 2nd gen connections.
+
+Replace `YOUR_PROJECT_ID`, `YOUR_PROJECT_NUMBER`, and `YOUR_STAGING_BUCKET` throughout.
+
+#### Trigger 1 — Feature branch push (fast checks)
+
+```bash
+gcloud builds triggers import --region=us-central1 --project=YOUR_PROJECT_ID --source=- <<'EOF'
+name: ci-branch-push
+filename: cloudbuild/pr-checks.yaml
+repositoryEventConfig:
+  push:
+    branch: "^main$"
+    invertRegex: true
+  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/Saoussen-CH-customer-support-mas-ai
+  repositoryType: GITHUB
+serviceAccount: projects/YOUR_PROJECT_ID/serviceAccounts/YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com
+substitutions:
+  _GOOGLE_CLOUD_LOCATION: us-central1
+EOF
+```
+
+> `invertRegex: true` on `^main$` fires on every branch except `main`. This includes `develop`, which means develop pushes run pr-checks in addition to the standard CI trigger — harmless extra checks.
+
+#### Trigger 2 — Push to `develop` (standard CI, no deploy)
+
+```bash
+gcloud builds triggers import --region=us-central1 --project=YOUR_PROJECT_ID --source=- <<'EOF'
+name: ci-push-develop
+filename: cloudbuild/cloudbuild.yaml
+repositoryEventConfig:
+  push:
+    branch: "^develop$"
+  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/Saoussen-CH-customer-support-mas-ai
+  repositoryType: GITHUB
+serviceAccount: projects/YOUR_PROJECT_ID/serviceAccounts/YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com
+substitutions:
+  _EVAL_PROFILE: standard
+  _GOOGLE_CLOUD_LOCATION: us-central1
+EOF
+```
+
+#### Trigger 3 — Push to `main` (CI + CD, auto-detects whether to redeploy Agent Engine)
+
+No file filters needed. The `detect-agent-changes` step inside the YAML uses `git diff` to decide whether Agent Engine needs a redeploy.
 
 ```bash
 gcloud builds triggers import --region=us-central1 --project=YOUR_PROJECT_ID --source=- <<'EOF'
@@ -603,49 +456,59 @@ repositoryEventConfig:
   repositoryType: GITHUB
 serviceAccount: projects/YOUR_PROJECT_ID/serviceAccounts/YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com
 substitutions:
-  _GOOGLE_CLOUD_LOCATION: us-central1
-  _DEPLOY_AGENT_ENGINE: "false"
-  _STAGING_BUCKET: gs://YOUR_DEV_STAGING_BUCKET
-  _AGENT_ENGINE_RESOURCE_NAME: ""
-EOF
-```
-
-#### Trigger: Release tag (prod canary)
-
-```bash
-gcloud builds triggers import --region=us-central1 --project=YOUR_PROJECT_ID --source=- <<'EOF'
-name: release
-filename: cloudbuild/release.yaml
-repositoryEventConfig:
-  push:
-    tag: "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
-  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/Saoussen-CH-customer-support-mas-ai
-  repositoryType: GITHUB
-serviceAccount: projects/YOUR_PROJECT_ID/serviceAccounts/YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com
-substitutions:
   _EVAL_PROFILE: standard
   _GOOGLE_CLOUD_LOCATION: us-central1
+  _DEPLOY_AGENT_ENGINE: "false"
   _STAGING_BUCKET: gs://YOUR_STAGING_BUCKET
+  _AGENT_ENGINE_DISPLAY_NAME: customer-support-multiagent
   _AGENT_ENGINE_RESOURCE_NAME: ""
-  _CANARY_TRAFFIC_PERCENT: "10"
 EOF
 ```
 
-#### Trigger: Nightly regression monitor (prod)
+> `_DEPLOY_AGENT_ENGINE=false` is the default. The `detect-agent-changes` step overrides it at runtime when `customer_support_agent/` files are detected in the diff. Set it explicitly to `true` on a manual trigger run to force an Agent Engine redeploy regardless.
 
-Created automatically by Terraform. Run manually:
+#### Trigger 4 — Manual / nightly (full eval)
 
+The `manual` event type must be created from the **Cloud Console** (not supported by `triggers import`):
+
+
+1. Cloud Build → Triggers → **Create Trigger**
+2. Name: `ci-manual` | Region: `us-central1`
+3. Event: **Manual invocation**
+4. Source (2nd gen): repository `Saoussen-CH/customer-support-mas-ai` | branch: `main`
+5. Configuration: Cloud Build configuration file → `cloudbuild/cloudbuild-nightly.yaml`
+6. Substitution variables: `_EVAL_PROFILE=full`, `_GOOGLE_CLOUD_LOCATION=us-central1`, `_STAGING_BUCKET=gs://YOUR_BUCKET`
+7. Service account: `YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com`
+
+Run on demand via CLI:
 ```bash
 gcloud builds triggers run ci-manual --region=us-central1 --project=YOUR_PROJECT_ID --branch=main
 ```
 
+Or use the `nightly` make target (reads project and engine IDs from `.env` automatically):
+```bash
+# Push your changes first — Cloud Build clones from GitHub, not local files
+git push origin main
+
+# Then trigger (all CI steps, post-deploy off by default)
+make nightly
+
+# Run specific steps only
+make nightly RUN_LINT=false RUN_TOOL_TESTS=false   # unit + integration only
+make nightly RUN_LINT=false RUN_TOOL_TESTS=false RUN_UNIT_TESTS=false RUN_INTEGRATION_TESTS=false RUN_POST_DEPLOY_EVAL=true  # post-deploy only
+```
+
+**Note:** `make nightly` runs against the code already pushed to `main` on GitHub. Always push before running it.
+
 #### Fixing existing triggers with typos
+
+If a trigger was created with trailing spaces in the filename or branch pattern, update it in place:
 
 ```bash
 # List trigger IDs
 gcloud builds triggers list --region=us-central1 --format="table(name,id)"
 
-# Re-import with the id field to update in place
+# Re-import with the id field to update in place (no delete needed)
 gcloud builds triggers import --region=us-central1 --project=YOUR_PROJECT_ID --source=- <<'EOF'
 name: ci-cd-push-main
 id: YOUR_TRIGGER_ID
@@ -656,7 +519,7 @@ EOF
 
 ### Nightly Schedule
 
-Cloud Scheduler (created automatically by Terraform for prod):
+Cloud Build doesn't have native cron triggers. Use Cloud Scheduler:
 
 ```bash
 TRIGGER_ID=$(gcloud builds triggers list \
@@ -671,8 +534,6 @@ gcloud scheduler jobs create http nightly-full-eval \
   --time-zone="UTC"
 ```
 
----
-
 ## Substitution Variables
 
 | Variable | Default | Description |
@@ -684,40 +545,40 @@ gcloud scheduler jobs create http nightly-full-eval \
 | `_REGION` | `us-central1` | Cloud Run / Artifact Registry region |
 | `_SERVICE_NAME` | `customer-support-app` | Cloud Run service name |
 | `_AR_REPO` | `customer-support` | Artifact Registry repository |
-| `_DEPLOY_AGENT_ENGINE` | `false` | Force Agent Engine redeploy on push to main (auto-detected from git diff) |
-| `_STAGING_BUCKET` | | GCS staging bucket (e.g. `gs://my-bucket`) |
-| `_AGENT_ENGINE_RESOURCE_NAME` | | Full resource name of the current prod Agent Engine |
+| `_DEPLOY_AGENT_ENGINE` | `false` | Override to force Agent Engine redeploy. Auto-detected at runtime by `detect-agent-changes` step via `git diff`; set explicitly to `true` to force a redeploy regardless of changed files. |
+| `_STAGING_BUCKET` | `` | GCS staging bucket for Agent Engine deployment (e.g. `gs://my-bucket`) |
+| `_AGENT_ENGINE_RESOURCE_NAME` | `` | Full resource name of the Agent Engine for Cloud Run (e.g. `projects/P/locations/L/reasoningEngines/ID`) |
 | `_MODEL_ARMOR_ENABLED` | `false` | Enable Model Armor prompt filtering |
-| `_MODEL_ARMOR_TEMPLATE_ID` | | Model Armor template ID |
-| `_RUN_LOAD_TESTS` | `false` | Run Locust load tests (staging rc tags only) |
-| `_CANARY_TRAFFIC_PERCENT` | `10` | % of prod traffic to send to canary after eval passes |
-| `_CANARY_PROMOTE_THRESHOLD` | `2` | Consecutive passing nights before canary is auto-promoted (nightly) |
-| `_REGRESSION_THRESHOLD` | `0.05` | Max allowed relative score drop vs baseline, e.g. 0.05 = 5% (nightly) |
-| `_EVAL_DATASET` | `tests/post_deploy/datasets/post_deploy_cases.json` | Dataset for post-deploy eval (staging + prod release) |
+| `_MODEL_ARMOR_TEMPLATE_ID` | `` | Model Armor template ID (if enabled) |
+| `_RUN_LINT` | `true` | Run lint step (nightly only) |
+| `_RUN_TOOL_TESTS` | `true` | Run tool-tests step (nightly only) |
+| `_RUN_UNIT_TESTS` | `true` | Run unit-tests step (nightly only) |
+| `_RUN_INTEGRATION_TESTS` | `true` | Run integration-tests step (nightly only) |
+| `_RUN_POST_DEPLOY_EVAL` | `false` | Enable post-deploy eval (nightly only) |
+| `_AGENT_ENGINE_ID` | `` | Agent Engine ID for post-deploy eval |
+| `_STAGING_BUCKET` (nightly) | `` | GCS bucket for post-deploy eval HTML report upload (e.g. `gs://my-bucket`). Report saved to `gs://BUCKET/eval-reports/eval-TIMESTAMP.html`; URI logged as a param in Vertex AI Experiments run. |
 
 `$PROJECT_ID` and `$COMMIT_SHA` are built-in Cloud Build substitutions.
-
----
 
 ## Timeouts
 
 | Pipeline | Timeout | Rationale |
 |----------|---------|-----------|
-| `pr-checks.yaml` | 40 min | Up to standard profile + integration tests when agent files changed |
-| `cloudbuild-deploy.yaml` | 60 min | CI + Docker + Agent Engine + Cloud Run + smoke |
-| `release-staging.yaml` | 90 min | Full CI + Docker + Agent Engine + load tests + eval |
-| `release.yaml` | 90 min | Full CI + Docker + new Agent Engine + shadow + eval + canary |
-| `cloudbuild-nightly.yaml` | 60 min | Full eval with LLM judges + baseline comparison + promote-or-rollback |
-| `terraform-plan.yaml` | 20 min | Init + plan only |
-| `terraform-apply.yaml` | 30 min | Init + apply |
+| `pr-checks.yaml` | 20 min | Fast profile only, quick feedback |
+| `cloudbuild.yaml` | 60 min | Standard eval (integration tests ~36 min) |
+| `cloudbuild-deploy.yaml` | 60 min | CI + Docker build + Agent Engine + Cloud Run |
+| `cloudbuild-nightly.yaml` | 60 min | Full eval with LLM judges is slow |
+| `release.yaml` | 60 min | Standard eval + Docker build + Agent Engine + Cloud Run + smoke tests |
+| `terraform-plan.yaml` | 20 min | Init + plan only, no apply |
+| `terraform-apply.yaml` | 30 min | Init + apply (resource creation can be slow on first run) |
 
----
+## Local Development with Make
 
-## Make Targets for CI
+The `Makefile` at the project root mirrors the CI steps so developers can run the same checks locally:
 
 ```bash
 make install          # pip install + pre-commit install
-make lint             # ruff check + ruff format --check
+make lint             # ruff check + ruff format --check (same as pr-checks.yaml)
 make format           # auto-fix formatting
 make test-tools       # pure Python tests, no LLM
 make test-unit        # unit agent eval (EVAL_PROFILE=fast by default)
@@ -728,40 +589,24 @@ make test             # run all three in sequence
 make test-unit EVAL_PROFILE=standard
 make test-unit EVAL_PROFILE=full
 
-# Post-deploy eval against a deployed Agent Engine
+# Post-deploy eval
 make eval-post-deploy AGENT_ENGINE_ID=<id> EVAL_PROFILE=standard
 
-# Submit the full CI+CD pipeline to Cloud Build (dev)
-make submit-build                          # Cloud Run only
+# Submit the full CI+CD pipeline to Cloud Build (mirrors what the main trigger does)
+make submit-build                          # Cloud Run only (_DEPLOY_AGENT_ENGINE=false)
 make submit-build DEPLOY_AGENT_ENGINE=true # + Agent Engine redeploy
-make submit-build EVAL_PROFILE=fast        # faster feedback
+make submit-build EVAL_PROFILE=fast        # faster feedback (skip LLM-heavy evals)
 
-# Trigger the nightly pipeline against code on main
-git push origin main
-make nightly
-make nightly RUN_POST_DEPLOY_EVAL=true
+# Trigger the nightly pipeline (ci-manual) against already-pushed code on main
+# Cloud Build reads from GitHub — push your changes first
+make nightly                                         # all CI steps, post-deploy off
+make nightly RUN_LINT=false RUN_TOOL_TESTS=false     # unit + integration only
+make nightly RUN_INTEGRATION_TESTS=false RUN_POST_DEPLOY_EVAL=true  # skip integration, run post-deploy
+make nightly RUN_LINT=false RUN_TOOL_TESTS=false RUN_UNIT_TESTS=false RUN_INTEGRATION_TESTS=false RUN_POST_DEPLOY_EVAL=true  # post-deploy eval only
+# _STAGING_BUCKET is read automatically from GOOGLE_CLOUD_STORAGE_BUCKET in .env
+# HTML report → gs://BUCKET/eval-reports/eval-TIMESTAMP.html
+# Vertex AI Experiments run → eval-TIMESTAMP (same name, GCS URI logged as param)
 
 # Show all targets
 make help
 ```
-
----
-
-## Skipping Builds with `[skip ci]`
-
-For commits that change nothing deployable (docs, CI config):
-
-```bash
-git commit -m "docs: update CI_CD.md [skip ci]"
-```
-
-**When to use each mechanism:**
-
-| Scenario | Mechanism |
-|----------|-----------|
-| Feature branch work | Push normally, PR fires fast CI |
-| Agent logic changed on PR | Integration tests run automatically |
-| Merging to `main` | Push normally, auto-deploys to dev |
-| Staging validation | Tag `v*.*.*-rc.*`, push tag |
-| Production release | Tag `v*.*.*`, push tag |
-| Docs or CI config only | Add `[skip ci]` to commit message |
