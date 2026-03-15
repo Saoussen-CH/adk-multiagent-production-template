@@ -1,0 +1,324 @@
+# ==============================================================================
+# Customer Support MAS — Makefile
+# ==============================================================================
+# Usage:
+#   make <target>
+#   make help          List all available targets
+#
+# Override defaults with environment variables or inline:
+#   make test-unit EVAL_PROFILE=standard
+#   make eval-post-deploy AGENT_ENGINE_ID=1234567890
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Defaults (override from environment or command line)
+# ------------------------------------------------------------------------------
+PYTHON        ?= uv run python
+PYTEST        ?= uv run pytest
+EVAL_PROFILE  ?= fast
+AGENT         ?= product
+AGENT_ENGINE_ID ?=
+DELAY         ?= 5
+SUITE         ?=
+
+PYTHON_VERSION := 3.11
+PYTEST_FLAGS   := -v --tb=short
+
+# Common env vars required by all Vertex AI / Firestore steps
+COMMON_ENV := GOOGLE_GENAI_USE_VERTEXAI=True
+
+# ------------------------------------------------------------------------------
+# Phony targets
+# ------------------------------------------------------------------------------
+# ENV — target environment for multi-env Terraform targets (dev | staging | prod)
+ENV ?= dev
+
+.PHONY: help \
+        install setup-gcp setup-firestore setup-cloud-build \
+        setup-model-armor create-model-armor-template test-model-armor \
+        seed-db add-embeddings vector-index \
+        lint format \
+        test-tools test-unit test-integration test \
+        gen-evalset gen-integration-evalset \
+        eval-post-deploy \
+        frontend-install frontend-build frontend-dev \
+        deploy-agent-engine test-local \
+        deploy-cloud-run submit-build nightly \
+        bootstrap-tfstate terraform-init terraform-plan terraform-apply terraform-destroy infra-up
+
+# ==============================================================================
+# HELP
+# ==============================================================================
+
+help: ## Show this help message
+	@echo ""
+	@echo "Customer Support MAS — available targets:"
+	@echo ""
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  \033[36m%-28s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@echo ""
+	@echo "Examples:"
+	@echo "  make test                              # run all tests (EVAL_PROFILE=fast)"
+	@echo "  make test-unit EVAL_PROFILE=standard   # unit eval with standard profile"
+	@echo "  make gen-evalset AGENT=order           # generate order agent eval dataset"
+	@echo "  make eval-post-deploy AGENT_ENGINE_ID=1234567890"
+	@echo "  make nightly                                    # trigger nightly regression eval (reads .env)"
+	@echo "  make nightly REGRESSION_THRESHOLD=0.10         # allow up to 10% score drop"
+	@echo ""
+
+# ==============================================================================
+# SETUP
+# ==============================================================================
+
+install: ## Install Python deps + pre-commit hooks (uses uv)
+	pip install uv --quiet
+	uv sync --frozen --group dev
+	uv run pre-commit install
+	@echo "Done. Run 'make setup-gcp' next if setting up GCP for the first time."
+
+setup-gcp: ## Enable GCP APIs and configure IAM (reads .env)
+	bash ops/setup_gcp.sh
+
+setup-firestore: ## Create Firestore database and seed sample data
+	bash ops/setup_firestore.sh
+
+setup-cloud-build: ## Configure Cloud Build IAM, Artifact Registry, and Secret Manager
+	@PROJECT_ID="$(PROJECT_ID)"; \
+	REGION="$(REGION)"; \
+	STAGING_BUCKET="$(STAGING_BUCKET)"; \
+	if [ -f .env ]; then \
+		if [ -z "$$PROJECT_ID" ];     then PROJECT_ID=$$(grep '^GOOGLE_CLOUD_PROJECT='           .env | cut -d= -f2-); fi; \
+		if [ -z "$$REGION" ];         then REGION=$$(grep '^GOOGLE_CLOUD_LOCATION='              .env | cut -d= -f2-); fi; \
+		if [ -z "$$STAGING_BUCKET" ]; then STAGING_BUCKET=$$(grep '^GOOGLE_CLOUD_STORAGE_BUCKET=' .env | cut -d= -f2- | sed 's|gs://||'); fi; \
+	fi; \
+	if [ -z "$$PROJECT_ID" ] || [ -z "$$REGION" ] || [ -z "$$STAGING_BUCKET" ]; then \
+		echo "Error: PROJECT_ID, REGION, and STAGING_BUCKET are required."; \
+		echo "Add them to .env or pass inline: make setup-cloud-build PROJECT_ID=<id> REGION=<region> STAGING_BUCKET=<bucket>"; \
+		exit 1; \
+	fi; \
+	GITHUB_OWNER_ARG="$(GITHUB_OWNER)"; \
+	if [ -z "$$GITHUB_OWNER_ARG" ] && [ -f .env ]; then \
+		GITHUB_OWNER_ARG=$$(grep '^GITHUB_OWNER=' .env | cut -d= -f2- || echo ""); \
+	fi; \
+	bash ops/setup-cloud-build.sh "$$PROJECT_ID" "$$REGION" "$$STAGING_BUCKET" "$$GITHUB_OWNER_ARG"
+
+setup-model-armor: ## Enable Model Armor and configure floor settings
+	@ARGS=""; \
+	if [ -n "$(MODE)" ]; then ARGS="$$ARGS --mode $(MODE)"; fi; \
+	if [ -n "$(CREATE_TEMPLATE)" ]; then ARGS="$$ARGS --create-template"; fi; \
+	bash ops/setup_model_armor.sh $$ARGS
+
+create-model-armor-template: ## Create Model Armor template via Python SDK (use when gcloud model-armor is unavailable)
+	PYTHONPATH=. $(PYTHON) ops/create_model_armor_template.py
+
+test-model-armor: ## Smoke test Model Armor API (safe + unsafe prompts)
+	PYTHONPATH=. $(PYTHON) tests/test_model_armor.py
+
+seed-db: ## Seed Firestore with sample products, orders, invoices, users
+	set -a && . ./.env && set +a && PYTHONPATH=. $(PYTHON) -m customer_support_mas.database.fixtures \
+		--project $(shell grep GOOGLE_CLOUD_PROJECT .env | cut -d= -f2) \
+		--database $(shell grep FIRESTORE_DATABASE .env | cut -d= -f2 || echo customer-support-db)
+
+add-embeddings: ## Add vector embeddings to Firestore products (for RAG)
+	set -a && . ./.env && set +a && PYTHONPATH=. $(PYTHON) ops/add_embeddings.py \
+		--project $(shell grep GOOGLE_CLOUD_PROJECT .env | cut -d= -f2) \
+		--database $(shell grep FIRESTORE_DATABASE .env | cut -d= -f2 || echo customer-support-db) \
+		--location $(shell grep GOOGLE_CLOUD_LOCATION .env | cut -d= -f2 || echo us-central1)
+
+vector-index: ## Create Firestore vector index for semantic search
+	set -a && . ./.env && set +a && PYTHONPATH=. $(PYTHON) ops/create_vector_index.py
+
+# ==============================================================================
+# LINT & FORMAT
+# ==============================================================================
+
+lint: ## Check code style (ruff check + ruff format --check)
+	ruff check customer_support_mas/ --ignore=E501
+	ruff format customer_support_mas/ --check
+
+format: ## Auto-fix formatting with ruff
+	ruff format customer_support_mas/
+	ruff check customer_support_mas/ --fix --ignore=E501
+
+# ==============================================================================
+# TESTS
+# ==============================================================================
+
+test-tools: ## Run pure tool tests (no LLM, mocked Firestore) — fast
+	$(COMMON_ENV) $(PYTEST) \
+		tests/unit/test_tools.py \
+		tests/unit/test_mock_rag.py \
+		tests/unit/test_refund_standalone.py \
+		$(PYTEST_FLAGS)
+
+test-unit: ## Run unit agent eval (EVAL_PROFILE=fast|standard|full)
+	$(COMMON_ENV) EVAL_PROFILE=$(EVAL_PROFILE) $(PYTEST) \
+		tests/unit/test_agent_eval_ci.py \
+		$(PYTEST_FLAGS)
+
+test-integration: ## Run integration eval (EVAL_PROFILE=fast|standard|full, TEST=test_name to filter)
+	$(COMMON_ENV) EVAL_PROFILE=$(EVAL_PROFILE) $(PYTEST) \
+		tests/integration/test_integration_eval_ci.py \
+		$(if $(TEST),-k $(TEST),) \
+		$(PYTEST_FLAGS)
+
+test: test-tools test-unit test-integration ## Run all tests (EVAL_PROFILE=fast by default)
+
+# ==============================================================================
+# EVAL DATASET GENERATION
+# ==============================================================================
+
+gen-evalset: ## Generate unit eval dataset — AGENT=product|order|billing (default: product)
+	@ARGS="--agent $(AGENT) --delay $(DELAY)"; \
+	if [ -n "$(DRY_RUN)" ]; then ARGS="$$ARGS --dry-run"; fi; \
+	PYTHONPATH=. $(PYTHON) tests/generate_eval_dataset.py $$ARGS
+
+gen-integration-evalset: ## Generate integration eval dataset
+	@ARGS="--delay $(DELAY)"; \
+	if [ -n "$(SUITE)" ]; then ARGS="$$ARGS --suite $(SUITE)"; fi; \
+	if [ -n "$(DRY_RUN)" ]; then ARGS="$$ARGS --dry-run"; fi; \
+	PYTHONPATH=. $(PYTHON) tests/generate_integration_evalset.py $$ARGS
+
+# ==============================================================================
+# POST-DEPLOY EVALUATION
+# ==============================================================================
+
+eval-post-deploy: ## Evaluate deployed Agent Engine (AGENT_ENGINE_ID or AGENT_ENGINE_RESOURCE_NAME required)
+	@# Prefer AGENT_ENGINE_RESOURCE_NAME (full path) over AGENT_ENGINE_ID (numeric short ID)
+	@AGENT_ID="$(AGENT_ENGINE_RESOURCE_NAME)"; \
+	if [ -z "$$AGENT_ID" ]; then AGENT_ID="$(AGENT_ENGINE_ID)"; fi; \
+	if [ -z "$$AGENT_ID" ] && [ -f .env ]; then \
+		AGENT_ID=$$(grep '^AGENT_ENGINE_RESOURCE_NAME=' .env | cut -d= -f2-); \
+	fi; \
+	if [ -z "$$AGENT_ID" ]; then \
+		echo "Error: AGENT_ENGINE_ID or AGENT_ENGINE_RESOURCE_NAME is required."; \
+		echo "Usage: make eval-post-deploy AGENT_ENGINE_ID=<id> [EVAL_PROFILE=standard]"; \
+		echo "  or:  make eval-post-deploy AGENT_ENGINE_RESOURCE_NAME=projects/P/locations/L/reasoningEngines/ID"; \
+		echo "  Tip: set AGENT_ENGINE_RESOURCE_NAME in your .env to use the full resource name automatically."; \
+		exit 1; \
+	fi; \
+	PYTHONPATH=. $(PYTHON) tests/eval_vertex.py \
+		--agent-engine-id "$$AGENT_ID" \
+		--profile $(if $(filter fast,$(EVAL_PROFILE)),standard,$(EVAL_PROFILE)) \
+		--custom-inference \
+		--delay $(DELAY)
+
+# ==============================================================================
+# FRONTEND
+# ==============================================================================
+
+# ==============================================================================
+# TERRAFORM — Infrastructure as Code (multi-environment)
+# ==============================================================================
+# Usage:
+#   make infra-up ENV=dev        # init + apply for dev
+#   make infra-up ENV=staging    # init + apply for staging
+#   make infra-up ENV=prod       # init + apply for prod
+#   make terraform-plan ENV=dev  # preview changes only
+#
+# First-time per environment — create the GCS state bucket:
+#   make bootstrap-tfstate ENV=dev
+#
+# State is stored in GCS: gs://{project_id}-tf-state/customer-support-mas/{env}/
+# tfvars are stored in GCS: gs://{project_id}-tf-state/tfvars/terraform.tfvars
+# (Cloud Build reads them from there; update GCS after any local tfvars change)
+
+_TF_DIR = terraform/environments/$(ENV)
+_TF_PROJECT = $(shell grep '^project_id' $(_TF_DIR)/terraform.tfvars 2>/dev/null | sed 's/.*= *"\([^"]*\)".*/\1/')
+_TF_STATE_BUCKET = $(shell grep '^tfstate_bucket_name' $(_TF_DIR)/terraform.tfvars 2>/dev/null | sed 's/.*= *"\([^"]*\)".*/\1/' | grep . || echo "$(_TF_PROJECT)-tf-state")
+
+bootstrap-tfstate: ## Create GCS state bucket + upload tfvars (once per env). Usage: make bootstrap-tfstate ENV=dev
+	@[ -n "$(_TF_PROJECT)" ] || (echo "ERROR: project_id not found in $(_TF_DIR)/terraform.tfvars"; exit 1)
+	@[ -f "$(_TF_DIR)/terraform.tfvars" ] || (echo "ERROR: $(_TF_DIR)/terraform.tfvars not found. Copy from terraform.tfvars.example."; exit 1)
+	@echo "Creating state bucket: $(_TF_STATE_BUCKET) in project $(_TF_PROJECT)"
+	gsutil mb -p $(_TF_PROJECT) -l us-central1 --pap=enforced gs://$(_TF_STATE_BUCKET) || true
+	gsutil versioning set on gs://$(_TF_STATE_BUCKET)
+	gsutil uniformbucketlevelaccess set on gs://$(_TF_STATE_BUCKET)
+	@echo "Uploading tfvars to GCS..."
+	gsutil cp $(_TF_DIR)/terraform.tfvars gs://$(_TF_STATE_BUCKET)/tfvars/terraform.tfvars
+	@echo ""
+	@echo "Done. Run: make infra-up ENV=$(ENV)"
+
+terraform-init: ## Initialize Terraform for ENV (e.g. make terraform-init ENV=dev)
+	@[ -f "$(_TF_DIR)/terraform.tfvars" ] || (echo "ERROR: $(_TF_DIR)/terraform.tfvars not found."; exit 1)
+	cd $(_TF_DIR) && terraform init \
+		-backend-config="bucket=$(_TF_STATE_BUCKET)" \
+		-backend-config="prefix=customer-support-mas/$(ENV)" \
+		-reconfigure \
+		-force-copy
+
+terraform-plan: ## Preview infrastructure changes for ENV (e.g. make terraform-plan ENV=dev)
+	cd $(_TF_DIR) && terraform plan -var-file=terraform.tfvars -input=false
+
+terraform-apply: ## Apply infrastructure changes for ENV (e.g. make terraform-apply ENV=dev)
+	cd $(_TF_DIR) && terraform apply -var-file=terraform.tfvars -input=false
+
+terraform-destroy: ## Destroy all infrastructure for ENV — DESTRUCTIVE (e.g. make terraform-destroy ENV=dev)
+	@echo "WARNING: This will destroy ALL infrastructure for environment '$(ENV)' (project: $(_TF_PROJECT))."
+	@read -p "Type '$(ENV)' to confirm: " confirm && [ "$$confirm" = "$(ENV)" ]
+	cd $(_TF_DIR) && terraform destroy -var-file=terraform.tfvars -input=false
+
+infra-up: terraform-init terraform-apply ## Init + apply Terraform for ENV. Usage: make infra-up ENV=dev
+
+sync-tfvars: ## Upload updated local tfvars to GCS so CI picks up the changes. Usage: make sync-tfvars ENV=dev
+	@[ -f "$(_TF_DIR)/terraform.tfvars" ] || (echo "ERROR: $(_TF_DIR)/terraform.tfvars not found."; exit 1)
+	gsutil cp $(_TF_DIR)/terraform.tfvars gs://$(_TF_STATE_BUCKET)/tfvars/terraform.tfvars
+	@echo "Uploaded $(_TF_DIR)/terraform.tfvars → gs://$(_TF_STATE_BUCKET)/tfvars/terraform.tfvars"
+
+# ==============================================================================
+# FRONTEND
+# ==============================================================================
+
+frontend-install: ## Install frontend npm dependencies
+	cd frontend && npm ci
+
+frontend-build: ## Build React frontend for production
+	cd frontend && npm run build
+
+frontend-dev: ## Start frontend dev server (hot reload)
+	cd frontend && npm start
+
+# ==============================================================================
+# DEPLOYMENT
+# ==============================================================================
+
+test-local: ## Run agent locally to verify before deploying
+	PYTHONPATH=. $(PYTHON) deployment/deploy.py --action test_local
+
+deploy-agent-engine: ## Deploy agent to Vertex AI Agent Engine
+	PYTHONPATH=. $(PYTHON) deployment/deploy.py --action deploy
+
+deploy-cloud-run: ## Build and deploy backend to Cloud Run (ENV=dev|prod selects .env.<ENV>)
+	bash deployment/deploy-cloudrun.sh $(ENV)
+
+nightly: ## Trigger ci-manual Cloud Build (nightly regression eval against prod Agent Engine)
+	@# Requires AGENT_ENGINE_RESOURCE_NAME in .env (or pass inline)
+	@# Optional: REGRESSION_THRESHOLD=0.05 EVAL_PROFILE=full
+	@PROJECT_ID=$$(grep '^GOOGLE_CLOUD_PROJECT=' .env | cut -d= -f2-); \
+	STAGING_BUCKET=$$(grep '^GOOGLE_CLOUD_STORAGE_BUCKET=' .env | cut -d= -f2-); \
+	AGENT_RESOURCE="$(AGENT_ENGINE_RESOURCE_NAME)"; \
+	if [ -z "$$AGENT_RESOURCE" ] && [ -f .env ]; then \
+		AGENT_RESOURCE=$$(grep '^AGENT_ENGINE_RESOURCE_NAME=' .env | cut -d= -f2-); \
+	fi; \
+	if [ -z "$$AGENT_RESOURCE" ]; then \
+		echo "Error: AGENT_ENGINE_RESOURCE_NAME is required."; \
+		echo "  Set it in .env or pass inline: make nightly AGENT_ENGINE_RESOURCE_NAME=projects/P/locations/L/reasoningEngines/ID"; \
+		exit 1; \
+	fi; \
+	THRESHOLD="$(if $(REGRESSION_THRESHOLD),$(REGRESSION_THRESHOLD),0.05)"; \
+	PROFILE="$(if $(EVAL_PROFILE),$(EVAL_PROFILE),full)"; \
+	gcloud builds triggers run ci-manual \
+		--project="$$PROJECT_ID" \
+		--region=us-central1 \
+		--branch=main \
+		--substitutions="_AGENT_ENGINE_RESOURCE_NAME=$$AGENT_RESOURCE,_STAGING_BUCKET=$$STAGING_BUCKET,_REGRESSION_THRESHOLD=$$THRESHOLD,_EVAL_PROFILE=$$PROFILE"
+
+submit-build: ## Submit full CI+CD pipeline to Cloud Build (DEPLOY_AGENT_ENGINE=true to also redeploy agent)
+	@PROJECT_ID=$$(grep '^GOOGLE_CLOUD_PROJECT=' .env | cut -d= -f2-); \
+	STAGING_BUCKET=$$(grep '^GOOGLE_CLOUD_STORAGE_BUCKET=' .env | cut -d= -f2-); \
+	AGENT_ENGINE_RESOURCE_NAME=$$(grep '^AGENT_ENGINE_RESOURCE_NAME=' .env | cut -d= -f2-); \
+	AGENT_ENGINE_DISPLAY_NAME=$$(grep '^AGENT_ENGINE_DISPLAY_NAME=' .env | cut -d= -f2-); \
+	COMMIT_SHA=$$(git rev-parse HEAD); \
+	gcloud builds submit . \
+		--config cloudbuild/cloudbuild-deploy.yaml \
+		--project "$$PROJECT_ID" \
+		--substitutions "COMMIT_SHA=$$COMMIT_SHA,_STAGING_BUCKET=$$STAGING_BUCKET,_AGENT_ENGINE_RESOURCE_NAME=$$AGENT_ENGINE_RESOURCE_NAME,_AGENT_ENGINE_DISPLAY_NAME=$$AGENT_ENGINE_DISPLAY_NAME,_DEPLOY_AGENT_ENGINE=$(if $(DEPLOY_AGENT_ENGINE),$(DEPLOY_AGENT_ENGINE),false),_EVAL_PROFILE=$(EVAL_PROFILE)"
