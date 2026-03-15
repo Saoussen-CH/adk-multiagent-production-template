@@ -23,8 +23,8 @@ gcloud auth login
 gcloud auth application-default login
 gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 
-git clone https://github.com/Saoussen-CH/customer-support-mas-ai.git
-cd customer-support-mas-ai
+git clone https://github.com/Saoussen-CH/adk-multiagent-production-template.git
+cd adk-multiagent-production-template
 ```
 
 ---
@@ -47,6 +47,14 @@ See [ENV_SETUP.md](./ENV_SETUP.md) for full variable reference.
 
 The project uses a **multi-environment Terraform layout**: one GCP project per environment (dev/staging/prod), each with its own state and config. All infrastructure is defined once in `terraform/modules/core/` and deployed to each environment independently.
 
+**Enable the Cloud Resource Manager API first** — Terraform requires it but cannot enable it itself:
+
+```bash
+gcloud services enable cloudresourcemanager.googleapis.com --project=YOUR_DEV_PROJECT_ID
+gcloud services enable cloudresourcemanager.googleapis.com --project=YOUR_STAGING_PROJECT_ID
+gcloud services enable cloudresourcemanager.googleapis.com --project=YOUR_PROD_PROJECT_ID
+```
+
 ```bash
 cp terraform/environments/dev/terraform.tfvars.example \
    terraform/environments/dev/terraform.tfvars
@@ -55,29 +63,34 @@ cp terraform/environments/dev/terraform.tfvars.example \
 Edit the three required fields:
 
 ```hcl
-project_id          = "css-mas-dev"
-staging_bucket_name = "css-mas-dev-staging"   # must be globally unique
+project_id          = "your-dev-project-id"
+staging_bucket_name = "your-dev-project-id-staging"   # must be globally unique
 github_owner        = "your-github-username"
 ```
 
-**Create the GCS state bucket** (once per environment: stores remote Terraform state and tfvars for CI):
+**Create the GCS state bucket and apply infrastructure** (once per environment):
 
 ```bash
-make bootstrap-tfstate ENV=dev
+# Dev
+make bootstrap-tfstate ENV=dev   # creates bucket + enables Resource Manager API + grants your account access + uploads tfvars
+make infra-up ENV=dev
+
+# Staging
+make bootstrap-tfstate ENV=staging
+make infra-up ENV=staging
+
+# Prod
+make bootstrap-tfstate ENV=prod
+make infra-up ENV=prod
 ```
 
-> **Multiple Google accounts?** If your `gcloud auth application-default` account differs
-> from the account that created the bucket (e.g. you have separate accounts for infra and dev),
-> grant storage access to the ADC account:
-> ```bash
-> gsutil iam ch user:YOUR_ADC_ACCOUNT@gmail.com:roles/storage.admin gs://YOUR_PROJECT_ID-tf-state
-> ```
+`bootstrap-tfstate` automatically:
+1. Enables `cloudresourcemanager.googleapis.com` (required by Terraform)
+2. Creates the GCS state bucket
+3. Grants your active `gcloud` account `storage.admin` so `terraform init` can read remote state immediately
+4. Uploads `terraform.tfvars` to GCS (Cloud Build reads it from there)
 
-**Apply infrastructure:**
-
-```bash
-make infra-up ENV=dev   # terraform init + apply
-```
+> **Note:** The Compute Engine service account (`PROJECT_NUMBER-compute@developer.gserviceaccount.com`) does not exist until after the first `make infra-up` — it is created when GCP enables the Compute Engine API. Do not try to grant it bucket access before running `infra-up`. Terraform handles that IAM binding automatically on first apply.
 
 Terraform creates:
 - GCS staging bucket (Agent Engine artifacts)
@@ -87,30 +100,6 @@ Terraform creates:
 - All IAM bindings (Cloud Run SA, Agent Engine SA, Cloud Build SA)
 - Model Armor template + floor settings
 - Cloud Scheduler nightly job (prod only)
-
-Repeat for staging and prod **before** merging PRs to those branches (the `terraform-plan`/`terraform-apply`
-CI triggers need the state bucket to exist and the compute SA to have access):
-
-```bash
-# Staging
-make bootstrap-tfstate ENV=staging
-make sync-tfvars ENV=staging
-gsutil iam ch serviceAccount:STAGING_PROJECT_NUMBER-compute@developer.gserviceaccount.com:roles/storage.admin \
-  gs://css-mas-staging-tf-state
-make infra-up ENV=staging
-
-# Prod
-make bootstrap-tfstate ENV=prod
-make sync-tfvars ENV=prod
-gsutil iam ch serviceAccount:PROD_PROJECT_NUMBER-compute@developer.gserviceaccount.com:roles/storage.admin \
-  gs://css-mas-prod-tf-state
-make infra-up ENV=prod
-```
-
-> The `gsutil iam ch` step is a one-time bootstrap: the compute SA needs bucket access to run
-> `terraform-plan`/`terraform-apply` in CI, but that permission is only granted by Terraform itself
-> (via `iam.tf`): which can't run until it has bucket access. After the first `make infra-up`,
-> Terraform owns the permission permanently and this manual step is no longer needed.
 
 > After any local tfvars change (e.g. adding `agent_engine_resource_name` after first deploy),
 > sync it back to GCS so CI picks it up:
@@ -155,13 +144,13 @@ One-time manual step in the GCP Console (cannot be automated):
 
 1. Go to **Cloud Build → Repositories (2nd gen)**
 2. Click **Create host connection** → select **GitHub** → authorize → name it `github-connection` (region: `us-central1`)
-3. Click **Link Repository** → select `Saoussen-CH/customer-support-mas-ai` → click **Link**
+3. Click **Link Repository** → select `Saoussen-CH/adk-multiagent-production-template` → click **Link**
 4. Confirm the linked repo name:
    ```bash
    gcloud builds repositories list --connection=github-connection \
      --region=us-central1 --project=YOUR_PROJECT_ID
    ```
-   Cloud Build slugifies the name, e.g. `Saoussen-CH-customer-support-mas-ai`
+   Cloud Build slugifies the name, e.g. `Saoussen-CH-adk-multiagent-production-template`
 
 Then enable trigger creation in Terraform:
 
@@ -169,7 +158,7 @@ Then enable trigger creation in Terraform:
 # In terraform/environments/dev/terraform.tfvars (repeat for staging/prod):
 github_connected           = true
 cloudbuild_connection_name = "github-connection"
-cloudbuild_repo_name       = "Saoussen-CH-customer-support-mas-ai"  # from step above
+cloudbuild_repo_name       = "Saoussen-CH-adk-multiagent-production-template"  # from step above
 ```
 
 ```bash
@@ -410,9 +399,9 @@ No rebuild needed: Cloud Run is pinned to the version tag:
 
 ```bash
 gcloud run deploy customer-support-app \
-  --image=us-central1-docker.pkg.dev/css-mas-prod/customer-support/customer-support-app:v0.0.9 \
+  --image=us-central1-docker.pkg.dev/YOUR_PROD_PROJECT/customer-support/customer-support-app:v0.0.9 \
   --region=us-central1 \
-  --project=css-mas-prod
+  --project=YOUR_PROD_PROJECT
 ```
 
 ### Update pyproject.toml version before tagging

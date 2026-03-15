@@ -318,7 +318,7 @@ make sync-tfvars ENV=dev
 |----------|-------------|---------|
 | `_ENV_DIRECTORY` | Path to environment dir | `terraform/environments/dev` |
 | `_ENVIRONMENT` | Environment name | `dev` |
-| `_TF_STATE_BUCKET` | GCS bucket for state + tfvars | `css-mas-dev-tf-state` |
+| `_TF_STATE_BUCKET` | GCS bucket for state + tfvars | `YOUR_PROJECT_ID-tf-state` |
 
 ---
 
@@ -377,7 +377,7 @@ CLOUD_RUN_URL=https://your-cloud-run-url pytest tests/smoke/ -v
 
 ## Load Tests
 
-Load tests run in dev (push to main) and staging (rc tag releases).
+Load tests run in staging only (rc tag releases).
 
 **Tool:** [Locust](https://locust.io/): `tests/load/locustfile.py`
 
@@ -571,7 +571,7 @@ All roles are granted by Terraform (`terraform/modules/core/iam.tf`). No service
 
 > **Prerequisites**
 > 1. Create a 2nd gen host connection: Cloud Console → Cloud Build → **Repositories (2nd gen)** → **Create host connection** → GitHub → name it `github-connection`
-> 2. Link the repository: **Link Repository** → select `Saoussen-CH/customer-support-mas-ai`
+> 2. Link the repository: **Link Repository** → select `Saoussen-CH/adk-multiagent-production-template`
 > 3. Get the slugified repo name: `gcloud builds repositories list --connection=github-connection --region=us-central1`
 > 4. Set `github_connected=true`, `cloudbuild_connection_name`, and `cloudbuild_repo_name` in `terraform/environments/*/terraform.tfvars`, then run `make infra-up`
 >
@@ -599,7 +599,7 @@ filename: cloudbuild/cloudbuild-deploy.yaml
 repositoryEventConfig:
   push:
     branch: "^main$"
-  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/Saoussen-CH-customer-support-mas-ai
+  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/Saoussen-CH-adk-multiagent-production-template
   repositoryType: GITHUB
 serviceAccount: projects/YOUR_PROJECT_ID/serviceAccounts/YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com
 substitutions:
@@ -619,7 +619,7 @@ filename: cloudbuild/release.yaml
 repositoryEventConfig:
   push:
     tag: "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
-  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/Saoussen-CH-customer-support-mas-ai
+  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/Saoussen-CH-adk-multiagent-production-template
   repositoryType: GITHUB
 serviceAccount: projects/YOUR_PROJECT_ID/serviceAccounts/YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com
 substitutions:

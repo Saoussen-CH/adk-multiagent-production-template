@@ -65,7 +65,7 @@ locals {
 # PR checks — auto-detects customer_support_mas/ changes and runs integration
 # tests when needed. No manual /gcbrun comment required.
 resource "google_cloudbuild_trigger" "pr_checks" {
-  count           = var.github_connected ? 1 : 0
+  count           = var.github_connected && local.is_dev ? 1 : 0
   project         = var.project_id
   location        = var.region
   name            = "ci-pull-request"
