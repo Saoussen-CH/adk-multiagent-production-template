@@ -199,9 +199,11 @@ eval-post-deploy: ## Evaluate deployed Agent Engine (AGENT_ENGINE_ID or AGENT_EN
 		echo "  Tip: set AGENT_ENGINE_RESOURCE_NAME in your .env to use the full resource name automatically."; \
 		exit 1; \
 	fi; \
-	PYTHONPATH=. $(PYTHON) scripts/eval_vertex.py \
+	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
+	set -a && . ./$(ENV_FILE) && set +a && PYTHONPATH=. $(PYTHON) tests/eval_vertex.py \
 		--agent-engine-id "$$AGENT_ID" \
 		--profile $(if $(filter fast,$(EVAL_PROFILE)),standard,$(EVAL_PROFILE)) \
+		--custom-inference \
 		--delay $(DELAY)
 
 # ==============================================================================
