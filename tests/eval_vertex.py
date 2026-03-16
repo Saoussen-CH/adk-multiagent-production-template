@@ -203,38 +203,20 @@ def run_custom_inference(
                         if "text" in event:
                             response_text += event["text"]
 
-                # Build intermediate events in the format the eval SDK expects.
-                # Strip ADK-specific fields that the Vertex AI eval pipeline's
-                # protobuf parser doesn't recognize (causes ProcessItemsResult:[])
-                # - thought_signature: internal ADK field on Part objects
-                # - id: ADK extension on function_call / function_response objects
-                def _sanitize_part(part: dict) -> dict:
-                    """Remove ADK-only fields the eval proto parser rejects."""
-                    p = {k: v for k, v in part.items() if k != "thought_signature"}
-                    if "function_call" in p and isinstance(p["function_call"], dict):
-                        fc = dict(p["function_call"])
-                        fc.pop("id", None)
-                        p["function_call"] = fc
-                    if "function_response" in p and isinstance(p["function_response"], dict):
-                        fr = dict(p["function_response"])
-                        fr.pop("id", None)
-                        p["function_response"] = fr
-                    return p
-
+                # Build intermediate events matching the format the eval SDK produces
+                # via run_inference(). Keep thought_signature and function_call.id —
+                # these are required by the TOOL_USE_QUALITY rubric evaluator.
+                # (Previously stripped for create_evaluation_run() which is broken anyway.)
                 intermediate = []
                 for evt in events[:-1] if len(events) > 1 else []:
                     if not isinstance(evt, dict) or "content" not in evt:
                         continue
                     content = evt["content"]
                     if isinstance(content, dict) and "parts" in content:
-                        clean_parts = [_sanitize_part(p) for p in content["parts"] if isinstance(p, dict)]
-                        clean_content = {**content, "parts": clean_parts}
                         intermediate.append(
                             {
                                 "event_id": evt.get("id", ""),
-                                "content": clean_content,
-                                "creation_timestamp": evt.get("timestamp", ""),
-                                "author": evt.get("author", ""),
+                                "content": content,
                             }
                         )
 
@@ -263,8 +245,9 @@ def run_custom_inference(
                 response_text, events, intermediate = await _query_single(prompt)
 
                 logger.info(
-                    "  -> %d events, %d chars: %s",
+                    "  -> %d events, %d intermediate, %d chars: %s",
                     len(events),
+                    len(intermediate),
                     len(response_text),
                     response_text[:100] + ("..." if len(response_text) > 100 else ""),
                 )
@@ -782,6 +765,12 @@ def main():
         help="Save raw inference results (prompts + responses) to JSON for debugging",
     )
     parser.add_argument(
+        "--inspect-sdk-events",
+        metavar="FILE",
+        help="Run SDK inference, dump the raw intermediate_events to FILE (JSON), then exit. "
+        "Use this to inspect the exact format the SDK produces for option-2 format matching.",
+    )
+    parser.add_argument(
         "--report",
         default="eval_report.html",
         help="Save full HTML evaluation report to this file (default: eval_report.html). "
@@ -865,6 +854,29 @@ def main():
     logger.info("Metrics: %s", config.get("metrics", []))
     logger.info("GCS dest: %s", gcs_dest)
 
+    # --inspect-sdk-events: dump SDK intermediate_events format and exit (option-2 research tool)
+    if getattr(args, "inspect_sdk_events", None):
+        logger.info("--inspect-sdk-events: running SDK inference and dumping intermediate_events...")
+        sdk_result = run_inference(client, agent_engine_id, dataset)
+        sdk_df = getattr(sdk_result, "eval_dataset_df", None)
+        if sdk_df is None or "intermediate_events" not in sdk_df.columns:
+            logger.error("SDK inference did not produce intermediate_events column")
+            sys.exit(1)
+        records = []
+        for i, (_, row) in enumerate(sdk_df.iterrows()):
+            records.append(
+                {
+                    "case": i,
+                    "prompt": row.get("prompt", ""),
+                    "response": row.get("response", ""),
+                    "intermediate_events": row["intermediate_events"],
+                }
+            )
+        with open(args.inspect_sdk_events, "w") as f:
+            json.dump(records, f, indent=2, default=str)
+        logger.info("SDK intermediate_events dumped to %s — inspect to implement option 2", args.inspect_sdk_events)
+        sys.exit(0)
+
     # Step 1: Run inference against deployed agent
     # Per official docs: use SDK's run_inference() as the default — it creates eval
     # items in the exact format the pipeline expects (no ADK-specific fields).
@@ -886,14 +898,17 @@ def main():
     if args.save_inference:
         inf_df = dataset_with_inference.eval_dataset_df if hasattr(dataset_with_inference, "eval_dataset_df") else None
         if inf_df is not None:
-            # Convert to serializable format
+            # Convert to serializable format — include intermediate_events for debugging
             inf_records = []
             for _, row in inf_df.iterrows():
+                intermediate = row.get("intermediate_events", [])
                 inf_records.append(
                     {
                         "prompt": row.get("prompt", ""),
                         "response": row.get("response", ""),
                         "reference": row.get("reference", ""),
+                        "intermediate_events_count": len(intermediate) if isinstance(intermediate, list) else 0,
+                        "intermediate_events": intermediate,
                     }
                 )
             with open(args.save_inference, "w") as f:
