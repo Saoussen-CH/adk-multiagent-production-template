@@ -50,12 +50,8 @@ steps:
     args:
       - "-c"
       - |
-        if git rev-parse HEAD~1 > /dev/null 2>&1; then
-          CHANGED=$(git diff --name-only HEAD~1 HEAD)
-        else
-          echo "First commit detected — treating all files as changed"
-          CHANGED="customer_support_mas/init"
-        fi
+        git fetch --deepen=1 2>/dev/null || true
+        CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "customer_support_mas/init")
 
         # Flag 1: run tests if agent code, tests, or eval wrappers changed
         if echo "$$CHANGED" | grep -qE '^(customer_support_mas|tests|eval_wrappers)/'; then
