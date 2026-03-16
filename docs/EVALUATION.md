@@ -121,34 +121,36 @@ EVAL_PROFILE=full pytest tests/ -v
 
 **How to run:**
 ```bash
-# Standard eval (tool use + response quality): uses custom inference adapter
+# Standard eval via make (recommended)
+make eval-post-deploy ENV=staging
+
+# Standard eval (tool use + response quality) — multi-agent setup
 python tests/eval_vertex.py \
-    --agent-engine-id projects/PROJECT/locations/LOCATION/reasoningEngines/ENGINE_ID
+    --agent-engine-id projects/PROJECT/locations/LOCATION/reasoningEngines/ENGINE_ID \
+    --custom-inference
 
 # Full eval (+ hallucination + safety)
 python tests/eval_vertex.py \
     --agent-engine-id projects/PROJECT/locations/LOCATION/reasoningEngines/ENGINE_ID \
+    --custom-inference \
     --profile full
 
-# Custom dataset
+# Save results + debug inference (includes intermediate_events)
 python tests/eval_vertex.py \
     --agent-engine-id projects/PROJECT/locations/LOCATION/reasoningEngines/ENGINE_ID \
-    --dataset tests/post_deploy/datasets/post_deploy_cases.json
-
-# Save results + debug inference
-python tests/eval_vertex.py \
-    --agent-engine-id projects/PROJECT/locations/LOCATION/reasoningEngines/ENGINE_ID \
+    --custom-inference \
     --output eval_results.json \
     --save-inference inference_debug.json
 
-# Use SDK's built-in inference (single-agent systems only)
+# Dump SDK intermediate_events format to file (for debugging/format research)
 python tests/eval_vertex.py \
     --agent-engine-id projects/PROJECT/locations/LOCATION/reasoningEngines/ENGINE_ID \
-    --sdk-inference
+    --inspect-sdk-events sdk_events.json
 
 # Adjust delay between prompts (default 3s, increase for rate limit issues)
 python tests/eval_vertex.py \
     --agent-engine-id projects/PROJECT/locations/LOCATION/reasoningEngines/ENGINE_ID \
+    --custom-inference \
     --delay 8.0
 ```
 
@@ -161,8 +163,10 @@ python tests/eval_vertex.py \
 | `--dataset` | `post_deploy_cases.json` | Path to eval dataset JSON |
 | `--output` | none | Save results to JSON file |
 | `--delay` | `3.0` | Seconds between prompts (rate limit protection) |
-| `--sdk-inference` | off | Use SDK's `run_inference()` instead of custom adapter |
-| `--save-inference` | none | Save raw prompt/response pairs to JSON for debugging |
+| `--custom-inference` | off | Use custom `async_stream_query()` adapter (required for multi-agent AgentTool) |
+| `--save-inference` | none | Save raw prompt/response/intermediate_events to JSON for debugging |
+| `--inspect-sdk-events` | none | Run SDK inference, dump raw `intermediate_events` to FILE, then exit (format research) |
+| `--sdk-inference` | off | Legacy alias for `--custom-inference` |
 
 **Key files:**
 - `tests/eval_vertex.py`: main eval script
@@ -172,7 +176,7 @@ python tests/eval_vertex.py \
 
 ### Custom Inference Adapter vs SDK Inference
 
-The eval script uses a **custom inference adapter** by default instead of the SDK's built-in `run_inference()`. This is required for multi-agent systems that use `AgentTool`.
+Pass `--custom-inference` for multi-agent systems that use `AgentTool`. Without it, the SDK's built-in `run_inference()` is used, which fails on AgentTool.
 
 **Why the SDK's `run_inference()` fails for AgentTool:**
 
@@ -186,23 +190,23 @@ With `AgentTool`, the conversation flow is:
 2. Sub-agent returns a `function_response` event (with result text)
 3. Root agent emits a final `text` event (human-readable response)
 
-The SDK only captures events 1-2 and stops: it never sees the final text response (event 3). When it tries to parse event 2 (a `function_response`), it fails with `'text'` key not found.
-
-**How the custom adapter works:**
-
-The custom adapter uses `async_stream_query()` which yields ALL events including the final text response. This matches how the production backend (`backend/app/agent_client.py`) processes Agent Engine responses.
+The SDK stops at event 2 and fails to parse it as text. The custom adapter uses `async_stream_query()` which yields all events, matching how the production backend works.
 
 ```
-SDK run_inference():         function_call → function_response → STOPS (parse error)
-Custom adapter:              function_call → function_response → text response → DONE
-Production backend:          function_call → function_response → text response → DONE
+SDK run_inference():   function_call → function_response → STOPS (parse error)
+Custom adapter:        function_call → function_response → text response → DONE
+Production backend:    function_call → function_response → text response → DONE
 ```
 
-> **Note:** `stream_query()` (sync) also has issues: it only yields the first event for AgentTool calls. Always use `async_stream_query()`.
+> `stream_query()` (sync) also has issues: it only yields the first event for AgentTool calls. The custom adapter always uses `async_stream_query()`.
 
-**When to use `--sdk-inference`:**
-- Only for single-agent systems or agents that don't use `AgentTool`
-- For debugging/comparison with the custom adapter
+**intermediate_events and TOOL_USE_QUALITY:**
+
+The custom adapter preserves `thought_signature` and `function_call.id` in intermediate events — these fields are required by the `TOOL_USE_QUALITY` rubric evaluator. Stripping them causes the judge to see an empty trajectory and score ~0.02.
+
+**When to use SDK inference (no `--custom-inference`):**
+- Single-agent systems that don't use `AgentTool`
+- Use `--inspect-sdk-events FILE` to dump what the SDK captures for format comparison
 
 ### Resilience Features
 
@@ -240,12 +244,13 @@ The eval service requires `AgentInfo` to provide tool declarations and agent ins
 - ADK `PreloadMemoryTool` lacks `__globals__` → `typing.get_type_hints()` crashes
 - Sub-agents wrapped as `AgentTool` cause recursive introspection failures
 
-The script builds `AgentInfo` manually instead:
+The script builds `AgentInfo` manually instead, intentionally omitting `agent_resource_name`:
 ```python
 agent_info = types.evals.AgentInfo(
-    agent_resource_name=agent_engine_id,
     name=root_agent.name,
     instruction=root_agent.instruction or "",
+    # agent_resource_name is intentionally omitted: when set, evaluate() re-runs
+    # its own SDK inference which breaks on AgentTool and returns empty responses.
 )
 ```
 
