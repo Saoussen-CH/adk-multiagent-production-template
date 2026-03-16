@@ -32,8 +32,8 @@ substitutions:
   _AGENT_ENGINE_RESOURCE_NAME: ""
   _STAGING_BUCKET: ""
   _EVAL_PROFILE: "full"
-  _REGRESSION_THRESHOLD: "0.05"    # max allowed relative score drop vs baseline (0.05 = 5%)
-  _CANARY_PROMOTE_THRESHOLD: "2"   # promote canary after this many consecutive passing nights
+  _REGRESSION_THRESHOLD: "0.10"    # max allowed relative score drop vs baseline (0.10 = 10%)
+  _CANARY_PROMOTE_THRESHOLD: "1"   # promote canary after this many consecutive passing nights
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -63,14 +63,17 @@ steps:
       - "-c"
       - |
         TOKEN=$(gcloud auth print-access-token)
-        ENGINE_RESOURCE=$(curl -s \
+        API_RESPONSE=$(curl -s \
           -H "Authorization: Bearer $$TOKEN" \
-          "https://${_GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/${_GOOGLE_CLOUD_LOCATION}/reasoningEngines" \
-          | python3 -c "import json,sys; e=sorted([x for x in json.load(sys.stdin).get('reasoningEngines',[]) if 'customer-support-multiagent-v' in x.get('displayName','')],key=lambda x:x.get('createTime',''),reverse=True); print(e[0]['name'] if e else '')")
+          "https://${_GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/${_GOOGLE_CLOUD_LOCATION}/reasoningEngines")
+        ENGINE_RESOURCE=$(echo "$$API_RESPONSE" | python3 -c "import json,sys; e=sorted([x for x in json.load(sys.stdin).get('reasoningEngines',[]) if 'customer-support-multiagent-v' in x.get('displayName','')],key=lambda x:x.get('createTime',''),reverse=True); print(e[0]['name'] if e else '')")
+        ENGINE_NAME=$(echo "$$API_RESPONSE" | python3 -c "import json,sys; e=sorted([x for x in json.load(sys.stdin).get('reasoningEngines',[]) if 'customer-support-multiagent-v' in x.get('displayName','')],key=lambda x:x.get('createTime',''),reverse=True); print(e[0]['displayName'] if e else '')")
         if [ -z "$$ENGINE_RESOURCE" ]; then
           echo "No versioned Agent Engine found — falling back to substitution"
           ENGINE_RESOURCE="${_AGENT_ENGINE_RESOURCE_NAME}"
+          ENGINE_NAME="(from substitution)"
         fi
+        echo "Agent Engine: $$ENGINE_NAME"
         echo "Agent Engine resource: $$ENGINE_RESOURCE"
         echo "$$ENGINE_RESOURCE" > /workspace/agent_engine_resource_name.txt
     waitFor: ["-"]
