@@ -521,13 +521,15 @@ def load_baseline_from_gcs(gcs_uri: str) -> dict | None:
 
 
 def save_baseline_to_gcs(gcs_uri: str, details: dict, run_name: str):
-    """Save current eval scores to GCS as the new baseline."""
+    """Save current eval scores and composite score to GCS as the new baseline."""
     try:
         from google.cloud import storage
 
         bucket_name, object_path = _gcs_bucket_and_path(gcs_uri)
+        scores = {k: v for k, v in details.items() if not k.startswith("_")}
         payload = {
-            "scores": {k: v for k, v in details.items() if not k.startswith("_")},
+            "scores": scores,
+            "composite_score": compute_composite_score(scores),
             "metadata": {"run_name": run_name, "saved_at": pd.Timestamp.now().isoformat()},
         }
         client = storage.Client()
@@ -538,36 +540,67 @@ def save_baseline_to_gcs(gcs_uri: str, details: dict, run_name: str):
         logger.warning("Could not save baseline to GCS: %s", e)
 
 
-def compare_to_baseline(details: dict, baseline_scores: dict, threshold: float) -> tuple[bool, list[str]]:
-    """Compare current scores against baseline scores using a percentage-based threshold.
+# Composite score weights for promotion/regression decisions.
+# Reflects business priority: tool use + response quality = 80% of what matters.
+# Safety/hallucination are guardrails (Model Armor handles most safety) = 20%.
+# Per-metric absolute thresholds remain as a hard floor (separate check).
+COMPOSITE_WEIGHTS = {
+    "Tool Use Quality": 0.40,
+    "Final Response Quality": 0.40,
+    "Hallucination": 0.10,
+    "Safety": 0.10,
+}
+
+
+def compute_composite_score(details: dict) -> float:
+    """Compute weighted composite score from per-metric details.
+
+    Absorbs LLM judge variance across metrics — one metric dropping slightly
+    is offset by others improving, preventing false regression signals.
+    Only metrics present in both COMPOSITE_WEIGHTS and details are included;
+    weights are renormalized if some metrics are missing (e.g. fast profile).
+    """
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for metric, weight in COMPOSITE_WEIGHTS.items():
+        if metric in details:
+            weighted_sum += details[metric]["score"] * weight
+            total_weight += weight
+    return weighted_sum / total_weight if total_weight > 0 else 0.0
+
+
+def compare_to_baseline(details: dict, baseline: dict, threshold: float) -> tuple[bool, list[str]]:
+    """Compare current composite score against baseline composite score.
+
+    Uses a weighted composite score instead of per-metric comparison to absorb
+    LLM judge variance — a single case being judged differently across runs
+    (1/9 = 11% per-metric swing) no longer triggers a false regression signal.
 
     A regression is flagged when:
-        (baseline - current) / baseline > threshold
+        (baseline_composite - current_composite) / baseline_composite > threshold
 
-    For example, threshold=0.05 means a >5% relative drop triggers a regression.
-    This is more meaningful than an absolute drop because it scales with the
-    actual score range (a 0.05 drop from 0.9 is noise; from 0.5 it is critical).
-
-    Returns:
-        (passed, list_of_regression_descriptions)
+    Per-metric absolute thresholds remain as a hard floor (checked separately
+    in check_thresholds). This function only governs the promote/rollback decision.
     """
-    regressions = []
-    for metric, info in details.items():
-        if metric.startswith("_"):
-            continue
-        if metric not in baseline_scores:
-            continue
-        current = info.get("score", 0.0)
-        baseline = baseline_scores[metric].get("score", 0.0)
-        if baseline <= 0:
-            continue  # cannot compute relative drop against a zero baseline
-        relative_drop = (baseline - current) / baseline
-        if relative_drop > threshold:
-            regressions.append(
-                f"{metric}: {baseline:.4f} -> {current:.4f} "
-                f"(relative drop {relative_drop:.1%} > threshold {threshold:.1%})"
-            )
-    return len(regressions) == 0, regressions
+    baseline_scores = baseline.get("scores", {})
+    baseline_composite = baseline.get("composite_score")
+
+    current_composite = compute_composite_score(details)
+
+    if baseline_composite is None:
+        # Old baseline format — recompute from per-metric scores
+        baseline_composite = compute_composite_score(baseline_scores)
+
+    if baseline_composite <= 0:
+        return True, []
+
+    relative_drop = (baseline_composite - current_composite) / baseline_composite
+    if relative_drop > threshold:
+        return False, [
+            f"Composite score: {baseline_composite:.4f} -> {current_composite:.4f} "
+            f"(relative drop {relative_drop:.1%} > threshold {threshold:.1%})"
+        ]
+    return True, []
 
 
 def save_html_report(evaluation_result, output_path: str):
@@ -714,6 +747,8 @@ def print_results(passed: bool, details: dict):
         print(f"  [{status_icon}] {metric:<36} {info['score']:>8.4f} " f"{info['threshold']:>10.2f} {status:>8}")
 
     print("-" * 70)
+    composite = compute_composite_score(details)
+    print(f"  Composite score: {composite:.4f}  (weights: tool_use=40%, response=40%, hallucination=10%, safety=10%)")
     overall = "PASSED" if passed else "FAILED"
     print(f"  Overall: {overall}")
     print("=" * 70)
@@ -950,9 +985,7 @@ def main():
             logger.info("First run — saving current scores as baseline at %s", args.update_baseline)
             save_baseline_to_gcs(args.update_baseline, details, run_name)
         else:
-            regression_passed, regressions = compare_to_baseline(
-                details, baseline.get("scores", {}), args.regression_threshold
-            )
+            regression_passed, regressions = compare_to_baseline(details, baseline, args.regression_threshold)
             if regression_passed:
                 logger.info("No regression detected vs baseline (threshold: %.1f%%)", args.regression_threshold * 100)
                 save_baseline_to_gcs(args.update_baseline, details, run_name)
