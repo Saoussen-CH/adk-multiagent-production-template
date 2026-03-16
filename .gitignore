@@ -103,3 +103,4 @@ terraform/environments/*/terraform.tfstate
 terraform/environments/*/terraform.tfstate.backup
 terraform/environments/*/*.tfplan
 terraform/environments/*/backend.hcl
+ENTRY.md
