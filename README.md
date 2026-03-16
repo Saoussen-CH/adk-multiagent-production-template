@@ -103,7 +103,15 @@ Three test layers run before every deployment:
 | `make test-unit` | Single-agent behavior via AgentEvaluator | Low |
 | `make test-integration` | Multi-agent handoffs through root agent | Low |
 
-Plus post-deploy evaluation against the live Agent Engine using Vertex AI Gen AI Evaluation Service (`make eval-post-deploy`).
+All three support switchable eval profiles via `EVAL_PROFILE`:
+
+| Profile | Metrics | When |
+|---------|---------|------|
+| `fast` | Rouge-1 only | PRs (free, no LLM judge) |
+| `standard` | + tool name F1 / rubric LLM judge | Push to main (default) |
+| `full` | + final response match v2 | Nightly + release gate |
+
+Plus post-deploy evaluation against the live Agent Engine using Vertex AI Gen AI Evaluation Service (`make eval-post-deploy ENV=staging`).
 
 All pre-deploy tests run against in-memory mocks — no live Firestore or RAG calls.
 
