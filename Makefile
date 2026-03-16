@@ -126,8 +126,9 @@ add-embeddings: ## Add vector embeddings to Firestore products (use ENV=staging|
 		--database $(shell grep FIRESTORE_DATABASE $(if $(ENV),.env.$(ENV),.env) | cut -d= -f2 || echo customer-support-db) \
 		--location $(shell grep GOOGLE_CLOUD_LOCATION $(if $(ENV),.env.$(ENV),.env) | cut -d= -f2 || echo us-central1)
 
-vector-index: ## Create Firestore vector index for semantic search
-	set -a && . ./.env && set +a && PYTHONPATH=. $(PYTHON) scripts/create_vector_index.py
+vector-index: ## Create Firestore vector index for semantic search (use ENV=staging|prod)
+	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
+	set -a && . ./$(ENV_FILE) && set +a && PYTHONPATH=. $(PYTHON) ops/create_vector_index.py
 
 # ==============================================================================
 # LINT & FORMAT
@@ -285,8 +286,9 @@ frontend-dev: ## Start frontend dev server (hot reload)
 test-local: ## Run agent locally to verify before deploying
 	PYTHONPATH=. $(PYTHON) deployment/deploy.py --action test_local
 
-deploy-agent-engine: ## Deploy agent to Vertex AI Agent Engine
-	PYTHONPATH=. $(PYTHON) deployment/deploy.py --action deploy
+deploy-agent-engine: ## Deploy agent to Vertex AI Agent Engine (use ENV=staging|prod)
+	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
+	set -a && . ./$(ENV_FILE) && set +a && PYTHONPATH=. $(PYTHON) deployment/deploy.py --action deploy
 
 deploy-cloud-run: ## Build and deploy backend to Cloud Run
 	bash deployment/deploy-cloudrun.sh
