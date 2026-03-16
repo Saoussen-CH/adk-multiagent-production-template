@@ -133,6 +133,16 @@ make seed-db          # load demo products, orders, users, invoices
 make add-embeddings   # add vector embeddings for RAG semantic search
 ```
 
+Repeat for **every environment** before running the staging/prod eval pipelines:
+
+```bash
+make seed-db ENV=staging
+make add-embeddings ENV=staging
+
+make seed-db ENV=prod
+make add-embeddings ENV=prod
+```
+
 > `add-embeddings` can take a few minutes. The Firestore vector index must be
 > READY first: Terraform creates it automatically.
 

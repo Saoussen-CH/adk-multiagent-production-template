@@ -113,16 +113,18 @@ create-model-armor-template: ## Create Model Armor template via Python SDK (use 
 test-model-armor: ## Smoke test Model Armor API (safe + unsafe prompts)
 	PYTHONPATH=. $(PYTHON) scripts/test_model_armor.py
 
-seed-db: ## Seed Firestore with sample products, orders, invoices, users
-	set -a && . ./.env && set +a && PYTHONPATH=. $(PYTHON) -m customer_support_agent.database.seed \
-		--project $(shell grep GOOGLE_CLOUD_PROJECT .env | cut -d= -f2) \
-		--database $(shell grep FIRESTORE_DATABASE .env | cut -d= -f2 || echo customer-support-db)
+seed-db: ## Seed Firestore with sample products, orders, invoices, users (use ENV=staging|prod)
+	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
+	set -a && . ./$(ENV_FILE) && set +a && PYTHONPATH=. $(PYTHON) customer_support_mas/database/fixtures.py \
+		--project $(shell grep GOOGLE_CLOUD_PROJECT $(if $(ENV),.env.$(ENV),.env) | cut -d= -f2) \
+		--database $(shell grep FIRESTORE_DATABASE $(if $(ENV),.env.$(ENV),.env) | cut -d= -f2 || echo customer-support-db)
 
-add-embeddings: ## Add vector embeddings to Firestore products (for RAG)
-	set -a && . ./.env && set +a && PYTHONPATH=. $(PYTHON) scripts/add_embeddings.py \
-		--project $(shell grep GOOGLE_CLOUD_PROJECT .env | cut -d= -f2) \
-		--database $(shell grep FIRESTORE_DATABASE .env | cut -d= -f2 || echo customer-support-db) \
-		--location $(shell grep GOOGLE_CLOUD_LOCATION .env | cut -d= -f2 || echo us-central1)
+add-embeddings: ## Add vector embeddings to Firestore products (use ENV=staging|prod)
+	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
+	set -a && . ./$(ENV_FILE) && set +a && PYTHONPATH=. $(PYTHON) ops/add_embeddings.py \
+		--project $(shell grep GOOGLE_CLOUD_PROJECT $(if $(ENV),.env.$(ENV),.env) | cut -d= -f2) \
+		--database $(shell grep FIRESTORE_DATABASE $(if $(ENV),.env.$(ENV),.env) | cut -d= -f2 || echo customer-support-db) \
+		--location $(shell grep GOOGLE_CLOUD_LOCATION $(if $(ENV),.env.$(ENV),.env) | cut -d= -f2 || echo us-central1)
 
 vector-index: ## Create Firestore vector index for semantic search
 	set -a && . ./.env && set +a && PYTHONPATH=. $(PYTHON) scripts/create_vector_index.py
