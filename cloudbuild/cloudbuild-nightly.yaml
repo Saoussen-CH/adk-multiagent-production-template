@@ -62,13 +62,11 @@ steps:
     args:
       - "-c"
       - |
-        ENGINE_RESOURCE=$(gcloud ai reasoning-engines list \
-          --project="$PROJECT_ID" \
-          --region="${_GOOGLE_CLOUD_LOCATION}" \
-          --filter="displayName:customer-support-multiagent-v*" \
-          --format="value(name)" \
-          --sort-by="~createTime" \
-          --limit=1 2>/dev/null)
+        TOKEN=$(gcloud auth print-access-token)
+        ENGINE_RESOURCE=$(curl -s \
+          -H "Authorization: Bearer $$TOKEN" \
+          "https://${_GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/${_GOOGLE_CLOUD_LOCATION}/reasoningEngines" \
+          | python3 -c "import json,sys; e=sorted([x for x in json.load(sys.stdin).get('reasoningEngines',[]) if 'customer-support-multiagent-v' in x.get('displayName','')],key=lambda x:x.get('createTime',''),reverse=True); print(e[0]['name'] if e else '')")
         if [ -z "$$ENGINE_RESOURCE" ]; then
           echo "No versioned Agent Engine found — falling back to substitution"
           ENGINE_RESOURCE="${_AGENT_ENGINE_RESOURCE_NAME}"
