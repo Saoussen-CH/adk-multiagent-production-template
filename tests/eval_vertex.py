@@ -391,9 +391,13 @@ def run_evaluation(
     except Exception as _e:
         logger.warning("Could not import root_agent: %s — using defaults", _e)
 
+    # NOTE: agent_resource_name is intentionally omitted.
+    # When provided, evaluate() re-runs its own SDK-based inference which
+    # breaks on multi-agent AgentTool patterns and returns empty responses.
+    # Without it, evaluate() uses our pre-computed responses and
+    # intermediate_events from the custom async_stream_query() adapter.
     agent_info = types.evals.AgentInfo(
         name=agent_name,
-        agent_resource_name=agent_resource_name,
         instruction=agent_instruction,
     )
 
