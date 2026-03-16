@@ -104,3 +104,5 @@ terraform/environments/*/terraform.tfstate.backup
 terraform/environments/*/*.tfplan
 terraform/environments/*/backend.hcl
 ENTRY.md
+LINKEDIN.md
+CV_ENTRY.md

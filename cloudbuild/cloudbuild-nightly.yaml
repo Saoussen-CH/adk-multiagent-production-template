@@ -69,7 +69,7 @@ steps:
         export PATH="/workspace/.venv/bin:$$PATH"
 
         # Extract engine ID from full resource name
-        ENGINE_ID=$(echo "${_AGENT_ENGINE_RESOURCE_NAME}" | awk -F'/' '{print $NF}')
+        ENGINE_ID=$(echo "${_AGENT_ENGINE_RESOURCE_NAME}" | awk -F'/' '{print $$NF}')
 
         BASELINE_GCS="${_STAGING_BUCKET}/baselines/nightly-baseline.json"
 

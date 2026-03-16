@@ -297,7 +297,7 @@ steps:
       - |
         export PATH="/workspace/.venv/bin:$$PATH"
         ENGINE_RESOURCE=$(cat /workspace/agent_engine_resource_name.txt)
-        ENGINE_ID=$(echo "$$ENGINE_RESOURCE" | awk -F'/' '{print $NF}')
+        ENGINE_ID=$(echo "$$ENGINE_RESOURCE" | awk -F'/' '{print $$NF}')
         echo "Evaluating new Agent Engine ID: $$ENGINE_ID"
         python tests/eval_vertex.py \
           --agent-engine-id $$ENGINE_ID \
