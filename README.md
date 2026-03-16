@@ -2,7 +2,7 @@
 
 [![Use this template](https://img.shields.io/badge/Use_this_template-2ea44f?style=for-the-badge&logo=github)](../../generate)
 
-Reference implementation of a customer support system built with Google ADK and Gemini 2.5 Pro, demonstrating production patterns: multi-agent orchestration, RAG, Memory Bank, 3-layer evaluation, CI/CD pipelines, Firestore, Cloud Run, and full infrastructure-as-code with Terraform.
+Reference implementation of a customer support system built with Google ADK and Gemini 2.5 Pro, demonstrating production patterns: multi-agent orchestration, RAG, Memory Bank, 5-stage evaluation, CI/CD pipelines, Firestore, Cloud Run, and full infrastructure-as-code with Terraform.
 
 > **Getting started?** See **[GETTING_STARTED.md](./GETTING_STARTED.md)**
 
@@ -47,7 +47,7 @@ For full details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 | Session Management | Vertex AI Agent Engine sessions | Backend proxy with JWT auth + multi-user support |
 | Memory Bank | Vertex AI Memory Bank with callbacks | Cross-session preference recall |
 | Observability | LoggingPlugin + Cloud Logging | Production-ready monitoring |
-| Evaluation & Testing | Vertex AI Gen AI Evaluation + AgentEvaluator | 3-layer test suite with switchable eval profiles |
+| Evaluation & Testing | Vertex AI Gen AI Evaluation + AgentEvaluator | 5-stage eval: local → CI → staging → prod → nightly, with eval-gated canary |
 | RAG Semantic Search | text-embedding-004 (768-dim) | Vector search on products |
 | CI/CD | Cloud Build | Full pipeline with eval gating across dev/staging/prod |
 | Post-Deploy Eval | Vertex AI Gen AI Evaluation Service | Live agent scoring after deploy |
@@ -142,9 +142,8 @@ See [docs/CI_CD.md](./docs/CI_CD.md) for full pipeline details.
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | System design, agent hierarchy, data flow |
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Multi-environment Terraform + CI/CD setup |
 | [docs/CI_CD.md](./docs/CI_CD.md) | Cloud Build pipelines, triggers, branch strategy |
-| [docs/EVALUATION.md](./docs/EVALUATION.md) | 3-layer test strategy + post-deploy eval |
+| [docs/EVALUATION.md](./docs/EVALUATION.md) | 5-stage eval architecture + post-deploy eval |
 | [docs/TESTING_SCENARIOS.md](./docs/TESTING_SCENARIOS.md) | Demo scenarios, test data, credentials |
-| [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Deploy commands, multi-environment bootstrap |
 | [docs/PREREQUISITES.md](./docs/PREREQUISITES.md) | GCP APIs, IAM roles, manual setup |
 | [docs/ENV_SETUP.md](./docs/ENV_SETUP.md) | All environment variables explained |
 | [docs/MEMORY_BANK.md](./docs/MEMORY_BANK.md) | Memory Bank implementation details |
@@ -161,4 +160,4 @@ See [docs/CI_CD.md](./docs/CI_CD.md) for full pipeline details.
 
 ## License
 
-MIT License - See LICENSE file for details
+Apache 2.0 — see [LICENSE](./LICENSE) file for details.

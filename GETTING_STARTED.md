@@ -248,7 +248,9 @@ make test
 This evaluates the live deployed agent using Vertex AI's Gen AI Evaluation Service:
 
 ```bash
-make eval-post-deploy AGENT_ENGINE_ID=your-engine-id
+make eval-post-deploy ENV=dev
+# or with an explicit ID:
+make eval-post-deploy AGENT_ENGINE_ID=projects/PROJECT/locations/us-central1/reasoningEngines/ENGINE_ID
 ```
 
 Results appear in **Vertex AI → Experiments → post-deploy-eval**. Passing thresholds: `TOOL_USE_QUALITY ≥ 0.5` and `FINAL_RESPONSE_QUALITY ≥ 0.5`.
@@ -350,9 +352,8 @@ Session 2: "Tell me about the keyboard"
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Multi-environment setup, Terraform, CI/CD triggers |
 | [docs/PREREQUISITES.md](./docs/PREREQUISITES.md) | GCP APIs, IAM roles, manual setup |
 | [docs/ENV_SETUP.md](./docs/ENV_SETUP.md) | All environment variables explained |
-| [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Deploy commands, multi-environment bootstrap |
 | [docs/CI_CD.md](./docs/CI_CD.md) | Cloud Build pipelines, triggers, branch strategy |
-| [docs/EVALUATION.md](./docs/EVALUATION.md) | 3-layer test strategy + post-deploy eval |
+| [docs/EVALUATION.md](./docs/EVALUATION.md) | 5-stage eval architecture + post-deploy eval |
 | [docs/TESTING_SCENARIOS.md](./docs/TESTING_SCENARIOS.md) | Demo scenarios, test data, credentials |
 | [docs/MEMORY_BANK.md](./docs/MEMORY_BANK.md) | Memory Bank implementation details |
 | [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) | Firestore collections and schema |
