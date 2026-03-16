@@ -53,6 +53,31 @@ steps:
     waitFor: ["-"]
 
   # ===========================================================================
+  # Discover the latest prod Agent Engine by display name pattern.
+  # Queries Vertex AI directly — no GCS state file or Terraform update needed.
+  # ===========================================================================
+  - id: "resolve-engine-id"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        ENGINE_RESOURCE=$(gcloud ai reasoning-engines list \
+          --project="$PROJECT_ID" \
+          --region="${_GOOGLE_CLOUD_LOCATION}" \
+          --filter="displayName:customer-support-multiagent-v*" \
+          --format="value(name)" \
+          --sort-by="~createTime" \
+          --limit=1 2>/dev/null)
+        if [ -z "$$ENGINE_RESOURCE" ]; then
+          echo "No versioned Agent Engine found — falling back to substitution"
+          ENGINE_RESOURCE="${_AGENT_ENGINE_RESOURCE_NAME}"
+        fi
+        echo "Agent Engine resource: $$ENGINE_RESOURCE"
+        echo "$$ENGINE_RESOURCE" > /workspace/agent_engine_resource_name.txt
+    waitFor: ["-"]
+
+  # ===========================================================================
   # Post-deploy eval + baseline comparison
   #
   # --update-baseline: compares scores against the stored GCS baseline.
@@ -68,8 +93,8 @@ steps:
       - |
         export PATH="/workspace/.venv/bin:$$PATH"
 
-        # Extract engine ID from full resource name
-        ENGINE_ID=$(echo "${_AGENT_ENGINE_RESOURCE_NAME}" | awk -F'/' '{print $$NF}')
+        ENGINE_RESOURCE=$(cat /workspace/agent_engine_resource_name.txt)
+        ENGINE_ID=$(echo "$$ENGINE_RESOURCE" | awk -F'/' '{print $$NF}')
 
         BASELINE_GCS="${_STAGING_BUCKET}/baselines/nightly-baseline.json"
 
@@ -92,7 +117,7 @@ steps:
       - "FIRESTORE_DATABASE=${_FIRESTORE_DATABASE}"
       - "GOOGLE_CLOUD_STORAGE_BUCKET=${_STAGING_BUCKET}"
       - "GOOGLE_GENAI_USE_VERTEXAI=True"
-    waitFor: ["install-deps"]
+    waitFor: ["install-deps", "resolve-engine-id"]
 
   # ===========================================================================
   # Promote or rollback canary based on eval result.

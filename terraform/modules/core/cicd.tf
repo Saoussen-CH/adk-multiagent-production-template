@@ -260,7 +260,7 @@ resource "google_cloud_scheduler_job" "nightly_eval" {
   http_target {
     http_method = "POST"
     uri         = "https://cloudbuild.googleapis.com/v1/projects/${var.project_id}/locations/${var.region}/triggers/${google_cloudbuild_trigger.nightly[0].trigger_id}:run"
-    body        = base64encode(jsonencode({ branchName = "main" }))
+    body        = base64encode("{}")
     oauth_token { service_account_email = local.cloud_run_sa }
   }
 
