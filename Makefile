@@ -185,21 +185,18 @@ gen-integration-evalset: ## Generate integration eval dataset
 # POST-DEPLOY EVALUATION
 # ==============================================================================
 
-eval-post-deploy: ## Evaluate deployed Agent Engine (AGENT_ENGINE_ID or AGENT_ENGINE_RESOURCE_NAME required)
-	@# Prefer AGENT_ENGINE_RESOURCE_NAME (full path) over AGENT_ENGINE_ID (numeric short ID)
+eval-post-deploy: ## Evaluate deployed Agent Engine (use ENV=staging|prod; AGENT_ENGINE_ID optional)
+	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
 	@AGENT_ID="$(AGENT_ENGINE_RESOURCE_NAME)"; \
 	if [ -z "$$AGENT_ID" ]; then AGENT_ID="$(AGENT_ENGINE_ID)"; fi; \
-	if [ -z "$$AGENT_ID" ] && [ -f .env ]; then \
-		AGENT_ID=$$(grep '^AGENT_ENGINE_RESOURCE_NAME=' .env | cut -d= -f2-); \
+	if [ -z "$$AGENT_ID" ] && [ -f $(ENV_FILE) ]; then \
+		AGENT_ID=$$(grep '^AGENT_ENGINE_RESOURCE_NAME=' $(ENV_FILE) | cut -d= -f2-); \
 	fi; \
 	if [ -z "$$AGENT_ID" ]; then \
 		echo "Error: AGENT_ENGINE_ID or AGENT_ENGINE_RESOURCE_NAME is required."; \
-		echo "Usage: make eval-post-deploy AGENT_ENGINE_ID=<id> [EVAL_PROFILE=standard]"; \
-		echo "  or:  make eval-post-deploy AGENT_ENGINE_RESOURCE_NAME=projects/P/locations/L/reasoningEngines/ID"; \
-		echo "  Tip: set AGENT_ENGINE_RESOURCE_NAME in your .env to use the full resource name automatically."; \
+		echo "Usage: make eval-post-deploy ENV=staging [AGENT_ENGINE_ID=<id>]"; \
 		exit 1; \
 	fi; \
-	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
 	set -a && . ./$(ENV_FILE) && set +a && PYTHONPATH=. $(PYTHON) tests/eval_vertex.py \
 		--agent-engine-id "$$AGENT_ID" \
 		--profile $(if $(filter fast,$(EVAL_PROFILE)),standard,$(EVAL_PROFILE)) \
