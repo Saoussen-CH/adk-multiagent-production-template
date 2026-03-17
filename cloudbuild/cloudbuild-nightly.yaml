@@ -153,9 +153,12 @@ steps:
         SERVICE_JSON=$(gcloud run services describe ${_SERVICE_NAME} \
           --region="${_REGION}" --project="$PROJECT_ID" --format=json 2>/dev/null || echo "{}")
 
-        CANARY_REVISION=$(echo "$$SERVICE_JSON" | python3 -c "import json,sys;d=json.load(sys.stdin);r=[t.get('revisionName','') for t in d.get('status',{}).get('traffic',[]) if 0<t.get('percent',0)<100];print(r[0] if r else '')" 2>/dev/null || echo "")
-
+        # Champion = highest traffic revision (the stable prod revision).
+        # Canary = revision with a sha-* tag (set during release shadow deploy via --tag sha-SHORT_SHA).
+        # Using the deployment tag is explicit and correct regardless of traffic split percentages.
         CHAMPION_REVISION=$(echo "$$SERVICE_JSON" | python3 -c "import json,sys;d=json.load(sys.stdin);t=sorted(d.get('status',{}).get('traffic',[]),key=lambda x:x.get('percent',0),reverse=True);print(t[0].get('revisionName','') if t else '')" 2>/dev/null || echo "")
+
+        CANARY_REVISION=$(echo "$$SERVICE_JSON" | python3 -c "import json,sys;d=json.load(sys.stdin);t=[x for x in d.get('status',{}).get('traffic',[]) if x.get('tag','').startswith('sha-') and x.get('percent',0)>0];print(t[0].get('revisionName','') if t else '')" 2>/dev/null || echo "")
 
         if [ "$$EVAL_EXIT" = "0" ]; then
           NEW_COUNT=$$((PASS_COUNT + 1))
