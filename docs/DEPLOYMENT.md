@@ -23,8 +23,8 @@ gcloud auth login
 gcloud auth application-default login
 gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 
-git clone https://github.com/Saoussen-CH/customer-support-mas-ai.git
-cd customer-support-mas-ai
+git clone https://github.com/Saoussen-CH/adk-multiagent-production-template.git
+cd adk-multiagent-production-template
 ```
 
 ---
@@ -154,13 +154,13 @@ One-time manual step in the GCP Console (cannot be automated):
 
 1. Go to **Cloud Build → Repositories (2nd gen)**
 2. Click **Create host connection** → select **GitHub** → authorize → name it `github-connection` (region: `us-central1`)
-3. Click **Link Repository** → select `YOUR_GITHUB_USERNAME/customer-support-mas-ai` → click **Link**
+3. Click **Link Repository** → select `YOUR_GITHUB_USERNAME/adk-multiagent-production-template` → click **Link**
 4. Confirm the linked repo name:
    ```bash
    gcloud builds repositories list --connection=github-connection \
      --region=us-central1 --project=YOUR_PROJECT_ID
    ```
-   Cloud Build slugifies the name, e.g. `YOUR_GITHUB_USERNAME-customer-support-mas-ai`
+   Cloud Build slugifies the name, e.g. `YOUR_GITHUB_USERNAME-adk-multiagent-production-template`
 
 Then enable trigger creation in Terraform:
 
@@ -168,7 +168,7 @@ Then enable trigger creation in Terraform:
 # In terraform/environments/dev/terraform.tfvars (repeat for staging/prod):
 github_connected           = true
 cloudbuild_connection_name = "github-connection"
-cloudbuild_repo_name       = "YOUR_GITHUB_USERNAME-customer-support-mas-ai"  # from step above
+cloudbuild_repo_name       = "YOUR_GITHUB_USERNAME-adk-multiagent-production-template"  # from step above
 ```
 
 ```bash

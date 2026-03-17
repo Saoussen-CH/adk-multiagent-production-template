@@ -57,7 +57,7 @@ variable "cloud_run_service_name" {
 
 variable "github_repo" {
   type    = string
-  default = "customer-support-mas-ai"
+  default = "adk-multiagent-production-template"
 }
 
 variable "google_managed_sas_exist" {
@@ -85,7 +85,7 @@ variable "cloudbuild_connection_name" {
 }
 
 variable "cloudbuild_repo_name" {
-  description = "Repository name as shown in Cloud Build 2nd gen (e.g. YOUR_GITHUB_USERNAME-customer-support-mas-ai)."
+  description = "Repository name as shown in Cloud Build 2nd gen (e.g. YOUR_GITHUB_USERNAME-adk-multiagent-production-template)."
   type        = string
   default     = ""
 }

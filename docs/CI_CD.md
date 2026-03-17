@@ -575,7 +575,7 @@ All roles are granted by Terraform (`terraform/modules/core/iam.tf`). No service
 
 > **Prerequisites**
 > 1. Create a 2nd gen host connection: Cloud Console → Cloud Build → **Repositories (2nd gen)** → **Create host connection** → GitHub → name it `github-connection`
-> 2. Link the repository: **Link Repository** → select `YOUR_GITHUB_USERNAME/customer-support-mas-ai`
+> 2. Link the repository: **Link Repository** → select `YOUR_GITHUB_USERNAME/adk-multiagent-production-template`
 > 3. Get the slugified repo name: `gcloud builds repositories list --connection=github-connection --region=us-central1`
 > 4. Set `github_connected=true`, `cloudbuild_connection_name`, and `cloudbuild_repo_name` in `terraform/environments/*/terraform.tfvars`, then run `make infra-up`
 >
@@ -603,7 +603,7 @@ filename: cloudbuild/cloudbuild-deploy.yaml
 repositoryEventConfig:
   push:
     branch: "^main$"
-  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/YOUR_GITHUB_USERNAME-customer-support-mas-ai
+  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/YOUR_GITHUB_USERNAME-adk-multiagent-production-template
   repositoryType: GITHUB
 serviceAccount: projects/YOUR_PROJECT_ID/serviceAccounts/YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com
 substitutions:
@@ -623,7 +623,7 @@ filename: cloudbuild/release.yaml
 repositoryEventConfig:
   push:
     tag: "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
-  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/YOUR_GITHUB_USERNAME-customer-support-mas-ai
+  repository: projects/YOUR_PROJECT_ID/locations/us-central1/connections/github-connection/repositories/YOUR_GITHUB_USERNAME-adk-multiagent-production-template
   repositoryType: GITHUB
 serviceAccount: projects/YOUR_PROJECT_ID/serviceAccounts/YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com
 substitutions:

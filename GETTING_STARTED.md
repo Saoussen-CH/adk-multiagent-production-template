@@ -55,7 +55,7 @@ For full architecture details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 ## Repository structure
 
 ```
-customer-support-mas/
+adk-multiagent-production-template/
 ├── customer_support_mas/        # Production package
 │   ├── agents/
 │   │   ├── root/                # Coordinator agent
@@ -120,8 +120,8 @@ gcloud auth application-default login
 ### Step 2: Clone and install
 
 ```bash
-git clone https://github.com/Saoussen-CH/customer-support-mas-ai.git
-cd customer-support-mas-ai
+git clone https://github.com/Saoussen-CH/adk-multiagent-production-template.git
+cd adk-multiagent-production-template
 make install
 ```
 
