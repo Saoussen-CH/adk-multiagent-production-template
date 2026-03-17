@@ -20,7 +20,8 @@
 #       --update-env-vars=AGENT_ENGINE_RESOURCE_NAME=OLD_ENGINE --region=us-central1
 #
 # Substitutions (set in Cloud Build trigger config):
-#   _AGENT_ENGINE_RESOURCE_NAME  — full resource name of the live prod Agent Engine
+#   _AGENT_ENGINE_RESOURCE_NAME  — fallback engine resource name (used only if Cloud Run
+#                                  revision describe fails to return the env var)
 #   _STAGING_BUCKET              — GCS bucket for eval artifacts (gs://...)
 
 substitutions:
@@ -53,8 +54,17 @@ steps:
     waitFor: ["-"]
 
   # ===========================================================================
-  # Discover the latest prod Agent Engine by display name pattern.
-  # Queries Vertex AI directly — no GCS state file or Terraform update needed.
+  # Resolve Agent Engine from the Cloud Run revision under evaluation.
+  #
+  # Reads AGENT_ENGINE_RESOURCE_NAME directly from the revision's env vars:
+  #   - Canary live (sha-* tag, partial traffic): read from the canary revision
+  #     so we evaluate the NEW engine being promoted.
+  #   - No canary (champion at 100%): read from the champion revision
+  #     so we monitor the actual prod engine.
+  #
+  # This is always accurate — the env var is the engine wired to that revision.
+  # After a rollback the champion is at 100%, so we automatically evaluate the
+  # correct (champion) engine without any cleanup or state management.
   # ===========================================================================
   - id: "resolve-engine-id"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
@@ -62,18 +72,26 @@ steps:
     args:
       - "-c"
       - |
-        TOKEN=$(gcloud auth print-access-token)
-        API_RESPONSE=$(curl -s \
-          -H "Authorization: Bearer $$TOKEN" \
-          "https://${_GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/${_GOOGLE_CLOUD_LOCATION}/reasoningEngines")
-        ENGINE_RESOURCE=$(echo "$$API_RESPONSE" | python3 -c "import json,sys; e=sorted([x for x in json.load(sys.stdin).get('reasoningEngines',[]) if 'customer-support-multiagent-v' in x.get('displayName','')],key=lambda x:x.get('createTime',''),reverse=True); print(e[0]['name'] if e else '')")
-        ENGINE_NAME=$(echo "$$API_RESPONSE" | python3 -c "import json,sys; e=sorted([x for x in json.load(sys.stdin).get('reasoningEngines',[]) if 'customer-support-multiagent-v' in x.get('displayName','')],key=lambda x:x.get('createTime',''),reverse=True); print(e[0]['displayName'] if e else '')")
-        if [ -z "$$ENGINE_RESOURCE" ]; then
-          echo "No versioned Agent Engine found — falling back to substitution"
-          ENGINE_RESOURCE="${_AGENT_ENGINE_RESOURCE_NAME}"
-          ENGINE_NAME="(from substitution)"
+        SERVICE_JSON=$(gcloud run services describe ${_SERVICE_NAME} \
+          --region="${_REGION}" --project="$PROJECT_ID" --format=json 2>/dev/null || echo "{}")
+
+        # Prefer canary revision (sha-* tag, partial traffic); fall back to champion.
+        TARGET_REVISION=$(echo "$$SERVICE_JSON" | python3 -c "import json,sys;d=json.load(sys.stdin);t=d.get('status',{}).get('traffic',[]);canary=[x for x in t if x.get('tag','').startswith('sha-') and 0<x.get('percent',0)<100];champion=sorted(t,key=lambda x:x.get('percent',0),reverse=True);print(canary[0].get('revisionName','') if canary else (champion[0].get('revisionName','') if champion else ''))" 2>/dev/null || echo "")
+
+        ENGINE_RESOURCE=""
+        if [ -n "$$TARGET_REVISION" ]; then
+          echo "Reading engine from revision: $$TARGET_REVISION"
+          ENGINE_RESOURCE=$(gcloud run revisions describe "$$TARGET_REVISION" \
+            --region="${_REGION}" --project="$PROJECT_ID" --format=json 2>/dev/null | \
+            python3 -c "import json,sys;d=json.load(sys.stdin);c=(d.get('containers') or d.get('spec',{}).get('containers',[{}]));e=c[0].get('env',[]) if c else [];r=[x.get('value','') for x in e if x.get('name')=='AGENT_ENGINE_RESOURCE_NAME'];print(r[0] if r else '')" 2>/dev/null || echo "")
         fi
-        echo "Agent Engine: $$ENGINE_NAME"
+
+        if [ -z "$$ENGINE_RESOURCE" ]; then
+          echo "Could not read engine from revision — falling back to substitution"
+          ENGINE_RESOURCE="${_AGENT_ENGINE_RESOURCE_NAME}"
+        fi
+
+        echo "Target revision: $$TARGET_REVISION"
         echo "Agent Engine resource: $$ENGINE_RESOURCE"
         echo "$$ENGINE_RESOURCE" > /workspace/agent_engine_resource_name.txt
     waitFor: ["-"]
