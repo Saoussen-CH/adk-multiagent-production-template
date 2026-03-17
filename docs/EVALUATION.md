@@ -11,7 +11,7 @@ This document describes the 5-stage production evaluation architecture for the C
 │  Stage 1       Stage 2       Stage 3       Stage 4       Stage 5 │
 │  ┌─────┐      ┌─────┐      ┌─────┐      ┌─────┐      ┌─────┐   │
 │  │LOCAL│──────│ CI  │──────│STAGE│──────│PROD │──────│NIGHT│   │
-│  │ DEV │      │PIPE │      │EVAL │      │SMOKE│      │ LY  │   │
+│  │ DEV │      │PIPE │      │EVAL │      │GATE │      │ LY  │   │
 │  └─────┘      └─────┘      └─────┘      └─────┘      └─────┘   │
 │  ADK local    ADK+pytest   Vertex AI    Vertex AI    Vertex AI  │
 │  InMemory     InMemory     Eval Svc     Eval Svc     Eval Svc   │
@@ -26,10 +26,10 @@ This document describes the 5-stage production evaluation architecture for the C
 | 1 | Local Development | ADK AgentEvaluator + InMemoryRunner | Manual (`pytest tests/`) |
 | 2 | CI Pipeline | ADK AgentEvaluator + pytest | Every PR and push |
 | 3 | Post-Deploy Eval | Vertex AI Gen AI Eval Service | After deploy to staging or prod |
-| 4 | Production Smoke Test | Vertex AI Gen AI Eval Service | After deploy to prod |
+| 4 | Production Pre-Canary Eval Gate | Vertex AI Gen AI Eval Service | After shadow deploy to prod, before canary enable |
 | 5 | Nightly Regression | Vertex AI Gen AI Eval Service | Cloud Scheduler (midnight UTC) |
 
-Stages 3, 4, and 5 use the same script (`tests/eval_vertex.py`) against the live Agent Engine. Stage 3 runs after staging deploy; Stage 4 runs after prod deploy (smaller dataset, faster); Stage 5 runs on a nightly schedule.
+Stages 3, 4, and 5 use the same script (`tests/eval_vertex.py`) against the live Agent Engine. Stage 3 runs after staging deploy; Stage 4 runs against the prod shadow revision before canary is enabled; Stage 5 runs on a nightly schedule.
 
 ---
 
@@ -258,16 +258,16 @@ agent_info = types.evals.AgentInfo(
 
 ---
 
-## Stage 4: Production Smoke Test
+## Stage 4: Production Pre-Canary Eval Gate
 
-**Purpose:** Quick sanity check after deploying to production.
+**Purpose:** Eval gate against the shadow revision before enabling canary traffic. The new revision is deployed with `--no-traffic` — real users are unaffected. If eval fails, the shadow stays at 0% and the canary is never enabled.
 
 **Tools:** Same as Stage 3 (`eval_vertex.py`)
 
 **How it differs from Stage 3:**
-- Uses a smaller dataset (fewer prompts)
-- Runs with `standard` profile (no hallucination/safety: faster)
-- If smoke test fails → block the release and roll back manually via `gcloud run deploy` with the previous image tag
+- Runs against the shadow revision URL (prod, 0% traffic), not 100% traffic
+- Runs with `standard` profile (same as staging)
+- If eval fails → pipeline stops, shadow stays at 0%, no canary is enabled, no rollback needed
 
 **How to run:**
 ```bash
