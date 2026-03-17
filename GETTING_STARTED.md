@@ -55,7 +55,7 @@ For full architecture details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 ## Repository structure
 
 ```
-YOUR_REPO_NAME/
+customer-support-mas/
 ├── customer_support_mas/        # Production package
 │   ├── agents/
 │   │   ├── root/                # Coordinator agent
@@ -120,8 +120,8 @@ gcloud auth application-default login
 ### Step 2: Clone and install
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME.git
-cd YOUR_REPO_NAME
+git clone https://github.com/Saoussen-CH/customer-support-mas-ai.git
+cd customer-support-mas-ai
 make install
 ```
 
