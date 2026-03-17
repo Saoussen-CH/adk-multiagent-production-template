@@ -52,6 +52,7 @@ For full details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 | CI/CD | Cloud Build | Full pipeline with eval gating across dev/staging/prod |
 | Post-Deploy Eval | Vertex AI Gen AI Evaluation Service | Live agent scoring after deploy |
 | Infrastructure as Code | Terraform | Multi-environment (dev/staging/prod) with GCS remote state |
+| Resilience | Circuit breaker + exponential backoff | Protects Agent Engine calls: CLOSED/OPEN/HALF_OPEN, 5-failure threshold, 1s→60s retry |
 
 ---
 
