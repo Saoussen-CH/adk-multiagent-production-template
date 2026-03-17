@@ -109,7 +109,7 @@ All three support switchable eval profiles via `EVAL_PROFILE`:
 |---------|---------|------|
 | `fast` | Rouge-1 only | PRs (free, no LLM judge) |
 | `standard` | + tool name F1 / rubric LLM judge | Push to main (default) |
-| `full` | + final response match v2 | Nightly + release gate |
+| `full` | + final response match v2 | Nightly |
 
 Plus post-deploy evaluation against the live Agent Engine using Vertex AI Gen AI Evaluation Service (`make eval-post-deploy ENV=staging`).
 
