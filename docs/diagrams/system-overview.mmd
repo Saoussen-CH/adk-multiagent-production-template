@@ -8,13 +8,13 @@ graph TB
 
     subgraph "Vertex AI Agent Engine Runtime"
         subgraph "Root Coordinator"
-            RootAgent[🤖 Root Agent<br/>Model: Gemini 2.5 Pro<br/>Error Handling: Always Respond<br/>Callback: auto_save_to_memory_explicit]
+            RootAgent[🤖 Root Agent<br/>Model: Gemini 2.5 Pro<br/>Error Handling: Always Respond<br/>Callback: auto_save_to_memory]
         end
 
         subgraph "Specialist Agents"
-            ProductAgent[🛍️ Product Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>+ get_product_info default<br/>Callback: auto_save_to_memory_explicit]
-            OrderAgent[📦 Order Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>Callback: auto_save_to_memory_explicit]
-            BillingAgent[💳 Billing Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>Note: Refunds via workflow only<br/>Callback: auto_save_to_memory_explicit]
+            ProductAgent[🛍️ Product Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>+ get_product_info default<br/>Callback: auto_save_to_memory]
+            OrderAgent[📦 Order Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>Callback: auto_save_to_memory]
+            BillingAgent[💳 Billing Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>Note: Refunds via workflow only<br/>Callback: auto_save_to_memory]
         end
 
         subgraph "Workflow Patterns"
@@ -22,7 +22,7 @@ graph TB
         end
 
         subgraph "Memory Management"
-            Tracking[📊 Memory Callbacks<br/>auto_save_to_memory_explicit: Save session<br/>Creates VertexAiMemoryBankService<br/>Automatic extraction & persistence]
+            Tracking[📊 Memory Callbacks<br/>auto_save_to_memory: Save session<br/>Creates VertexAiMemoryBankService<br/>Automatic extraction & persistence]
         end
     end
 

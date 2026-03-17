@@ -36,12 +36,12 @@ Mermaid diagrams for the Multi-Agent Customer Support System.
 - Firestore integration with vector search
 
 **Order Agent** - `order-agent.mmd`
-- 3 tools (PreloadMemoryTool + 2 order tools)
-- Authenticated user context via `get_my_order_history`
+- 5 tools (PreloadMemoryTool + track_order + get_my_order_history + get_order_history + get_order_details)
+- Authenticated user context — all tools verify ownership
 - Firestore integration
 
 **Billing Agent** - `billing-agent.mmd`
-- 4 tools (PreloadMemoryTool + 3 billing tools)
+- 8 tools (PreloadMemoryTool + get_invoice + get_invoice_by_order_id + get_my_invoices + check_payment_status + get_my_payments + get_refundable_items + get_acceptable_refund_reasons)
 - Note: Refunds processed via `refund_workflow` only
 - Firestore integration
 
@@ -57,11 +57,10 @@ Mermaid diagrams for the Multi-Agent Customer Support System.
 ## Technical Notes
 
 **Callbacks:**
-All agents use `auto_save_to_memory_explicit` callback which:
-- Creates `VertexAiMemoryBankService` instance
-- Automatically saves session data to Memory Bank
-- Follows the explicit pattern (not invocation context)
-- Note: `track_agent_start` callback is commented out in code
+All agents use `auto_save_to_memory` callback which:
+- Calls `memory_service.add_session_to_memory(session)` after each agent turn
+- Skips evaluation sessions (session IDs starting with `___eval___session___`)
+- Note: `track_agent_start` callback is defined but not active by default
 
 **Agent Hierarchy:**
 - Root Agent: Gemini 2.5 Pro (complex reasoning, coordination)

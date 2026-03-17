@@ -9,9 +9,9 @@ graph TD
     subgraph "Domain Specialists"
         Product[🛍️ Product Agent<br/>Model: Gemini 2.5 Flash<br/>Tools: 8<br/>• PreloadMemoryTool<br/>• search_products RAG<br/>• get_product_info default<br/>• get_all_saved_products_info multi]
 
-        Order[📦 Order Agent<br/>Model: Gemini 2.5 Flash<br/>Tools: 3<br/>• PreloadMemoryTool<br/>• track_order<br/>• get_my_order_history]
+        Order[📦 Order Agent<br/>Model: Gemini 2.5 Flash<br/>Tools: 5<br/>• PreloadMemoryTool<br/>• track_order<br/>• get_my_order_history<br/>• get_order_history<br/>• get_order_details]
 
-        Billing[💳 Billing Agent<br/>Model: Gemini 2.5 Flash<br/>Tools: 4<br/>• PreloadMemoryTool<br/>• get_invoice<br/>• get_invoice_by_order_id<br/>• check_payment_status<br/>Note: Refunds via refund_workflow only]
+        Billing[💳 Billing Agent<br/>Model: Gemini 2.5 Flash<br/>Tools: 8<br/>• PreloadMemoryTool<br/>• get_invoice<br/>• get_invoice_by_order_id<br/>• get_my_invoices<br/>• check_payment_status<br/>• get_my_payments<br/>• get_refundable_items<br/>• get_acceptable_refund_reasons<br/>Note: Refunds via refund_workflow only]
     end
 
     subgraph "Workflow Patterns"
