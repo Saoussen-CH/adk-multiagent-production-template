@@ -52,8 +52,8 @@ flowchart TD
 
     subgraph nightly_pipe ["ci-manual nightly — prod"]
         direction TB
-        N1[post-deploy eval\nVertex AI Eval Service\nEVAL_PROFILE=full]
-        N2[compare vs GCS baseline\npercentage-based threshold]
+        N1[resolve engine from Cloud Run revision\neval via Vertex AI Eval Service\nEVAL_PROFILE=full]
+        N2[compare composite score vs GCS baseline\ntool_use×0.4 + response×0.4 + halluc×0.1 + safety×0.1\nthreshold: 10% relative drop]
         N3{regression?}
         N4[increment pass counter\npromote canary if N passes]
         N5[rollback champion\nreset counter\nfail build — alert team]

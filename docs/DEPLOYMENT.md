@@ -400,7 +400,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The `release` Cloud Build trigger fires automatically on the prod project. It runs lint + unit + integration tests, builds and pushes a Docker image tagged with `v1.0.0` / `$COMMIT_SHA` / `latest`, creates a new Agent Engine with a versioned display name, deploys Cloud Run as a **shadow revision** (zero live traffic), runs smoke tests against the shadow URL, runs post-deploy eval against the new Agent Engine, and if eval passes splits traffic to send `_CANARY_TRAFFIC_PERCENT` (default 10%) to the new revision. The nightly pipeline then auto-promotes the canary after 2 consecutive passing nights.
+The `release` Cloud Build trigger fires automatically on the prod project. It runs lint + unit + integration tests, builds and pushes a Docker image tagged with `v1.0.0` / `$COMMIT_SHA` / `latest`, creates a new Agent Engine with a versioned display name, deploys Cloud Run as a **shadow revision** (zero live traffic), runs smoke tests against the shadow URL, runs post-deploy eval against the new Agent Engine, and if eval passes splits traffic to send `_CANARY_TRAFFIC_PERCENT` (default 10%) to the new revision. The nightly pipeline then auto-promotes the canary after 1 consecutive passing night.
 
 See [CI_CD.md](./CI_CD.md#release-pipeline) for full release pipeline details and the versioning strategy.
 

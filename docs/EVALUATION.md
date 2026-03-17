@@ -167,6 +167,8 @@ python tests/eval_vertex.py \
 | `--save-inference` | none | Save raw prompt/response/intermediate_events to JSON for debugging |
 | `--inspect-sdk-events` | none | Run SDK inference, dump raw `intermediate_events` to FILE, then exit (format research) |
 | `--sdk-inference` | off | Legacy alias for `--custom-inference` |
+| `--update-baseline` | none | GCS path to baseline JSON (`gs://...`). Compares composite score; saves updated baseline on pass; exits 1 on regression |
+| `--regression-threshold` | `0.10` | Max allowed relative composite score drop vs baseline (nightly only) |
 
 **Key files:**
 - `tests/eval_vertex.py`: main eval script
@@ -278,17 +280,29 @@ python tests/eval_vertex.py \
 
 ## Stage 5: Nightly Regression
 
-**Purpose:** Detect model drift and quality degradation over time.
+**Purpose:** Detect model drift and quality degradation over time. Also drives canary promotion/rollback.
 
-**Tools:** Same as Stage 3 (`eval_vertex.py`), run on a schedule
+**Tools:** Same as Stage 3 (`eval_vertex.py`), run on a schedule via Cloud Scheduler
+
+**How the decision works:**
+
+Scores are combined into a **composite weighted score**: Tool Use Quality (40%) + Final Response Quality (40%) + Hallucination (10%) + Safety (10%). This absorbs LLM judge variance across metrics — a single-case flip in one metric won't trigger a false rollback.
+
+The composite score is compared against the GCS baseline (`$_STAGING_BUCKET/baselines/nightly-baseline.json`). If the relative drop exceeds `_REGRESSION_THRESHOLD` (default 10%), the build fails and the canary is rolled back.
+
+**Agent Engine resolution:** The nightly reads `AGENT_ENGINE_RESOURCE_NAME` directly from the active Cloud Run revision's env vars — canary if one is live, champion otherwise. This is always accurate and self-corrects after rollback without manual intervention.
 
 **How to run:**
 ```bash
-# Nightly full regression
+# Nightly full regression (manual trigger)
 python tests/eval_vertex.py \
-    --agent-engine-id projects/PROJECT/locations/LOCATION/apps/PROD_APP_ID \
+    --agent-engine-id ENGINE_ID \
     --profile full \
-    --output results/nightly-$(date +%Y%m%d).json
+    --custom-inference \
+    --output /workspace/eval_scores.json \
+    --update-baseline gs://YOUR_BUCKET/baselines/nightly-baseline.json \
+    --regression-threshold 0.10 \
+    --delay 5
 ```
 
 ---
@@ -326,7 +340,7 @@ All stages support the `EVAL_PROFILE` environment variable:
 PR          → fast       (quick feedback, free)
 Push main   → standard   (balanced quality gate)
 Nightly     → full       (comprehensive regression)
-Release     → full       (must pass before deploy)
+Release     → standard   (gates canary enable)
 Post-deploy → standard   (deployed agent quality)
 ```
 
