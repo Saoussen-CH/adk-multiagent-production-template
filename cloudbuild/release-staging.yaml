@@ -1,7 +1,7 @@
 # Staging Release Pipeline — Triggered by git tag push (v*.*.*-rc.*)
 #
 # Pre-prod validation gate before cutting a prod release tag.
-# Deploys to the staging project (css-mas-staging) with full traffic (no shadow)
+# Deploys to the staging project (your-project-staging) with full traffic (no shadow)
 # and runs load tests + post-deploy eval.
 #
 # Usage:

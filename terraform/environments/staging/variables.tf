@@ -76,7 +76,7 @@ variable "cloudbuild_connection_name" {
 }
 
 variable "cloudbuild_repo_name" {
-  description = "Repository name as shown in Cloud Build 2nd gen (e.g. Saoussen-CH-customer-support-mas-ai)."
+  description = "Repository name as shown in Cloud Build 2nd gen (e.g. YOUR_GITHUB_USERNAME-customer-support-mas-ai)."
   type        = string
   default     = ""
 }

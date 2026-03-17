@@ -242,7 +242,7 @@ echo "--- Linking GitHub repository to connection ---"
 REPO_URI="https://github.com/$(gcloud builds connections describe "${CONNECTION_NAME}" \
   --region="${REGION}" --project="${PROJECT_ID}" \
   --format='value(githubConfig.authorizerCredential.oauthTokenSecretVersion)' 2>/dev/null | \
-  xargs -I{} echo '' || echo '')saoussen/${REPO_NAME}"
+  xargs -I{} echo '' || echo '')${GITHUB_OWNER}/${REPO_NAME}"
 
 # Try to get the repo resource name (it may already be linked, possibly under a different name)
 REPO_RESOURCE=$(gcloud builds repositories list \
