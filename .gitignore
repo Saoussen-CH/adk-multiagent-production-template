@@ -82,6 +82,7 @@ presentations/
 eval_report.html
 ENTRY.md
 file.md
+docs/CICD_DESIGN_RATIONALE.md
 docs/EVAL_PROMOTION_STRATEGY.md
 docs/PYTHON_SETUP.md
 docs/EVAL_STRATEGY.md
