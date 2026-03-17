@@ -3,7 +3,7 @@
 
 project_id          = "your-dev-project-id"        # e.g. css-mas-dev
 staging_bucket_name = "your-dev-project-id-staging"
-github_owner        = "Saoussen-CH"
+github_owner        = "YOUR_GITHUB_USERNAME"
 
 # Uncomment after first Agent Engine deploy:
 # google_managed_sas_exist   = true
@@ -12,7 +12,7 @@ github_owner        = "Saoussen-CH"
 # Uncomment after creating 2nd gen Cloud Build connection:
 # github_connected           = true
 # cloudbuild_connection_name = "github-connection"
-# cloudbuild_repo_name       = "Saoussen-CH-customer-support-mas-ai"
+# cloudbuild_repo_name       = "YOUR_GITHUB_USERNAME-adk-multiagent-production-template"
 
 # Defaults (override if needed):
 # region                = "us-central1"

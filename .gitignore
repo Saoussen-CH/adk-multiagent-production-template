@@ -79,6 +79,7 @@ backend/build/
 # Local reference material and generated reports
 refs/
 presentations/
+medium/
 eval_report.html
 ENTRY.md
 file.md
