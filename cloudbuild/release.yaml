@@ -165,7 +165,7 @@ steps:
         CHAMPION=$(gcloud run services describe ${_SERVICE_NAME} \
           --region="${_REGION}" \
           --project="$PROJECT_ID" \
-          --format=json 2>/dev/null | python3 -c "import json,sys;d=json.load(sys.stdin);t=d.get('status',{}).get('traffic',[]);r=[x for x in t if x.get('percent',0)>0 and not x.get('latestRevision',False)] or [x for x in t if x.get('percent',0)>0];print(r[0].get('revisionName','') if r else '')" 2>/dev/null || echo "")
+          --format=json 2>/dev/null | python3 -c "import json,sys;d=json.load(sys.stdin);t=sorted(d.get('status',{}).get('traffic',[]),key=lambda x:x.get('percent',0),reverse=True);print(t[0].get('revisionName','') if t else '')" 2>/dev/null || echo "")
         echo "Champion revision: $$CHAMPION"
         echo "$$CHAMPION" > /workspace/champion_revision.txt
     waitFor: ["docker-push"]
@@ -279,6 +279,10 @@ steps:
       - |
         export PATH="/workspace/.venv/bin:$$PATH"
         SHADOW_URL=$(cat /workspace/shadow_url.txt)
+        if [ -z "$$SHADOW_URL" ]; then
+          echo "ERROR: shadow URL is empty — get-shadow-url step failed to resolve it"
+          exit 1
+        fi
         echo "Smoke testing shadow revision: $$SHADOW_URL"
         CLOUD_RUN_URL=$$SHADOW_URL pytest tests/smoke/ -v --tb=short
     waitFor: ["get-shadow-url"]
