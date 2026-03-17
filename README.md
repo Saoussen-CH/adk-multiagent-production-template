@@ -2,7 +2,7 @@
 
 [![Use this template](https://img.shields.io/badge/Use_this_template-2ea44f?style=for-the-badge&logo=github)](../../generate)
 
-Reference implementation of a customer support system built with Google ADK and Gemini 2.5 Pro, demonstrating production patterns: multi-agent orchestration, RAG, Memory Bank, 5-stage evaluation, CI/CD pipelines, Firestore, Cloud Run, and full infrastructure-as-code with Terraform.
+Reference implementation of a customer support system built with Google ADK and Gemini 2.5 Pro, demonstrating production patterns: multi-agent orchestration, RAG, Memory Bank, 5-stage evaluation, CI/CD pipelines, Model Armor, Firestore, Cloud Run, and full infrastructure-as-code with Terraform.
 
 > **Getting started?** See **[GETTING_STARTED.md](./GETTING_STARTED.md)**
 
