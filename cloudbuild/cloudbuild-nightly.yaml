@@ -16,8 +16,7 @@
 #   Rollback:
 #     gcloud run services update-traffic customer-support-app \
 #       --to-revisions=CHAMPION_REVISION=100 --region=us-central1 --project=PROJECT_ID
-#     gcloud run services update customer-support-app \
-#       --update-env-vars=AGENT_ENGINE_RESOURCE_NAME=OLD_ENGINE --region=us-central1
+#     (no env var update needed — nightly reads the engine from the champion revision directly)
 #
 # Substitutions (set in Cloud Build trigger config):
 #   _AGENT_ENGINE_RESOURCE_NAME  — fallback engine resource name (used only if Cloud Run
