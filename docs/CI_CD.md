@@ -114,12 +114,14 @@ install-deps
 ### cloudbuild-nightly.yaml (regression monitor + canary decision)
 
 ```
-install-deps
-  └── post-deploy-eval  (eval prod agent, capture exit code)
-      └── promote-or-rollback
-            pass N nights: promote canary to 100%, reset counter
-            regression:    rollback to champion, reset counter, fail build
+install-deps ──────────┐
+resolve-engine-id ─────┴── post-deploy-eval  (eval agent engine, capture exit code)
+                               └── promote-or-rollback
+                                     pass N nights: promote canary to 100%, reset counter
+                                     regression:    rollback to champion, reset counter, fail build
 ```
+
+`resolve-engine-id` reads `AGENT_ENGINE_RESOURCE_NAME` directly from the active Cloud Run revision's env vars: canary revision if one is live (`sha-*` tag, partial traffic), otherwise the champion. This is always accurate — the env var is the engine wired to that revision, and it self-corrects after rollback without any manual cleanup.
 
 ---
 
@@ -201,8 +203,10 @@ The `release` trigger runs:
 
 Nightly eval runs against the prod Agent Engine and compares scores against the stored GCS baseline:
 
+Regression is measured using a **composite weighted score**: Tool Use Quality (40%) + Final Response Quality (40%) + Hallucination (10%) + Safety (10%). A single-metric swing from LLM judge variance does not trigger a rollback — only a drop in the overall composite score exceeds the threshold.
+
 - **No regression detected**: baseline updated, nightly passes.
-- **Regression detected (score drop > `_REGRESSION_THRESHOLD`, percentage-based)**: nightly exits 1, team alerted via Cloud Build failure notification.
+- **Regression detected (composite score drop > `_REGRESSION_THRESHOLD`, default 10%)**: nightly exits 1, team alerted via Cloud Build failure notification.
 
 Canary promotion and rollback happen **automatically**:
 
@@ -214,7 +218,7 @@ Canary promotion and rollback happen **automatically**:
 | Regression detected, canary live | Roll back champion to 100%, reset counter, exit 1 |
 | Regression detected, no canary | Reset counter, exit 1 |
 
-The promotion threshold is `_CANARY_PROMOTE_THRESHOLD` (default: 2 consecutive passing nights).
+The promotion threshold is `_CANARY_PROMOTE_THRESHOLD` (default: 1 consecutive passing night).
 
 Pass counter stored at: `$_STAGING_BUCKET/baselines/canary-pass-count.json`
 
@@ -230,11 +234,7 @@ gcloud run services update-traffic customer-support-app \
 gcloud run services update-traffic customer-support-app \
   --to-revisions=CHAMPION_REVISION=100 \
   --region=us-central1 --project=YOUR_PROD_PROJECT
-
-# Point Cloud Run back to old Agent Engine after rollback
-gcloud run services update customer-support-app \
-  --update-env-vars="AGENT_ENGINE_RESOURCE_NAME=projects/.../reasoningEngines/OLD_ID" \
-  --region=us-central1 --project=YOUR_PROD_PROJECT
+# No env var update needed — nightly reads the engine from the champion revision directly
 
 # Check current traffic split
 gcloud run services describe customer-support-app \
@@ -494,11 +494,11 @@ Runs only if post-deploy-eval passed. Splits Cloud Run traffic between champion 
 
 ## Nightly Pipeline (cloudbuild-nightly.yaml)
 
-Evaluates the prod Agent Engine and compares against a GCS-stored baseline score:
+Resolves the Agent Engine from the active Cloud Run revision (canary if live, champion otherwise) and compares a composite weighted score against a GCS-stored baseline:
 
 - **First run**: saves current scores as baseline, passes.
 - **No regression**: updates baseline, passes.
-- **Regression detected (score drop > `_REGRESSION_THRESHOLD`, default 0.05)**: exits 1.
+- **Regression detected (composite score drop > `_REGRESSION_THRESHOLD`, default 0.10)**: exits 1.
 
 The nightly baseline is stored at `$_STAGING_BUCKET/baselines/nightly-baseline.json`.
 
@@ -671,7 +671,7 @@ gcloud scheduler jobs create http nightly-full-eval \
   --uri="https://cloudbuild.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/triggers/${TRIGGER_ID}:run" \
   --http-method=POST \
   --oauth-service-account-email="PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-  --message-body='{"branchName": "main"}' \
+  --message-body='{}' \
   --time-zone="UTC"
 ```
 
@@ -695,8 +695,8 @@ gcloud scheduler jobs create http nightly-full-eval \
 | `_MODEL_ARMOR_TEMPLATE_ID` | | Model Armor template ID |
 | `_RUN_LOAD_TESTS` | `false` | Run Locust load tests (staging rc tags only) |
 | `_CANARY_TRAFFIC_PERCENT` | `10` | % of prod traffic to send to canary after eval passes |
-| `_CANARY_PROMOTE_THRESHOLD` | `2` | Consecutive passing nights before canary is auto-promoted (nightly) |
-| `_REGRESSION_THRESHOLD` | `0.05` | Max allowed relative score drop vs baseline, e.g. 0.05 = 5% (nightly) |
+| `_CANARY_PROMOTE_THRESHOLD` | `1` | Consecutive passing nights before canary is auto-promoted (nightly) |
+| `_REGRESSION_THRESHOLD` | `0.10` | Max allowed composite score drop vs baseline, e.g. 0.10 = 10% (nightly) |
 | `_EVAL_DATASET` | `tests/post_deploy/datasets/post_deploy_cases.json` | Dataset for post-deploy eval (staging + prod release) |
 
 `$PROJECT_ID` and `$COMMIT_SHA` are built-in Cloud Build substitutions.
