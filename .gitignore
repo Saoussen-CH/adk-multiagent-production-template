@@ -91,6 +91,7 @@ docs/EVALSET_DATA_QUALITY.md
 docs/MEMORY_BANK.md
 docs/PRODUCTION_READINESS.md
 docs/VERTEX_CREATE_EVALUATION_RUN.md
+docs/diagrams/DRAWIO_TASK.md
 
 # Terraform
 terraform/.terraform/
