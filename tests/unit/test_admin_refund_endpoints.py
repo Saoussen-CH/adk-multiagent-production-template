@@ -297,5 +297,68 @@ def test_reject_twice_returns_409(monkeypatch, mock_db):
     assert second.status_code == 409
 
 
+# =============================================================================
+# 500 — unexpected (non-ApprovalError) exceptions must be caught, logged, and
+# returned as a clean JSON error body, not leaked as an unhandled server
+# error / stack trace. Added after code review flagged that the mutating
+# endpoints (approve/reject) — and, for consistency with the rest of
+# main.py, the GET too — had no generic `except Exception` fallback, unlike
+# every other endpoint in this file.
+# =============================================================================
+
+
+def test_pending_unexpected_error_returns_500(monkeypatch, mock_db):
+    _authenticate_as("approver-1")
+    monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
+
+    def _boom(db):
+        raise RuntimeError("firestore hiccup")
+
+    monkeypatch.setattr(main_module.refund_approvals, "list_pending", _boom)
+
+    response = client.get("/api/admin/refunds/pending")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Failed to list pending refunds"}
+    assert "RuntimeError" not in response.text
+    assert "Traceback" not in response.text
+
+
+def test_approve_unexpected_error_returns_500(monkeypatch, mock_db):
+    rid = _stage_pending(mock_db)
+    _authenticate_as("approver-1")
+    monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
+
+    def _boom(db, request_id, approver_id):
+        raise RuntimeError("firestore hiccup")
+
+    monkeypatch.setattr(main_module.refund_approvals, "approve_refund", _boom)
+
+    response = client.post(f"/api/admin/refunds/{rid}/approve")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Failed to approve refund"}
+    assert "RuntimeError" not in response.text
+    assert "Traceback" not in response.text
+
+
+def test_reject_unexpected_error_returns_500(monkeypatch, mock_db):
+    rid = _stage_pending(mock_db)
+    _authenticate_as("approver-1")
+    monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
+
+    def _boom(db, request_id, approver_id, note=""):
+        raise RuntimeError("firestore hiccup")
+
+    monkeypatch.setattr(main_module.refund_approvals, "reject_refund", _boom)
+
+    response = client.post(f"/api/admin/refunds/{rid}/reject", json={})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Failed to reject refund"}
+    assert "RuntimeError" not in response.text
+    assert "Traceback" not in response.text
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

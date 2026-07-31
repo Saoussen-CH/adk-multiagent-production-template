@@ -622,7 +622,11 @@ async def get_session_messages(
 @app.get("/api/admin/refunds/pending")
 async def pending_refunds(approver_id: str = Depends(require_approver)):
     """List all PENDING_APPROVAL refund requests. Approver-only."""
-    return {"requests": refund_approvals.list_pending(db.db)}
+    try:
+        return {"requests": refund_approvals.list_pending(db.db)}
+    except Exception as e:
+        logger.error("Unexpected error listing pending refunds", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list pending refunds")
 
 
 @app.post("/api/admin/refunds/{request_id}/approve")
@@ -633,6 +637,9 @@ async def approve_refund_endpoint(request_id: str, approver_id: str = Depends(re
     except refund_approvals.ApprovalError as exc:
         status_code = {"not_found": 404, "not_pending": 409, "self_approval": 403}.get(exc.code, 400)
         raise HTTPException(status_code=status_code, detail=str(exc))
+    except Exception as e:
+        logger.error("Unexpected error approving refund", request_id=request_id, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to approve refund")
 
 
 @app.post("/api/admin/refunds/{request_id}/reject")
@@ -643,6 +650,9 @@ async def reject_refund_endpoint(request_id: str, body: dict = {}, approver_id: 
     except refund_approvals.ApprovalError as exc:
         status_code = {"not_found": 404, "not_pending": 409}.get(exc.code, 400)
         raise HTTPException(status_code=status_code, detail=str(exc))
+    except Exception as e:
+        logger.error("Unexpected error rejecting refund", request_id=request_id, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to reject refund")
 
 
 @app.get("/api")
