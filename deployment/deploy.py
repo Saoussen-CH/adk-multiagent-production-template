@@ -105,6 +105,13 @@ if MODEL_ARMOR_CONFIG["enabled"] and MODEL_ARMOR_CONFIG["template_id"]:
     ENV_VARS["MODEL_ARMOR_ENABLED"] = "true"
     ENV_VARS["MODEL_ARMOR_TEMPLATE_ID"] = MODEL_ARMOR_CONFIG["template_id"]
 
+# Propagate the FedEx MCP toolset URL to Agent Engine runtime if set. Conditional
+# (not a hardcoded default) so the deployed engine's env has no MCP_FEDEX_URL key
+# at all when unset, matching order agent's build_fedex_toolset(), which checks
+# os.environ.get("MCP_FEDEX_URL") and returns None when absent.
+if os.getenv("MCP_FEDEX_URL"):
+    ENV_VARS["MCP_FEDEX_URL"] = os.getenv("MCP_FEDEX_URL")
+
 
 # =============================================================================
 # HELPERS
