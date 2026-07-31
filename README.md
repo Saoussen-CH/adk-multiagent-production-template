@@ -53,6 +53,7 @@ For full details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 | Post-Deploy Eval | Vertex AI Gen AI Evaluation Service | Live agent scoring after deploy |
 | Infrastructure as Code | Terraform | Multi-environment (dev/staging/prod) with GCS remote state |
 | Resilience | Circuit breaker + exponential backoff | Protects Agent Engine calls: CLOSED/OPEN/HALF_OPEN, 5-failure threshold, 1s→60s retry |
+| External Integrations | FedEx tracking via MCP server + Agent Gateway egress | Read-only tool, mock mode for dev, credentials never in agent code |
 
 ---
 

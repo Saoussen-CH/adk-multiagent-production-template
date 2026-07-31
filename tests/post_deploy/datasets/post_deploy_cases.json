@@ -61,5 +61,12 @@
     "expected_tool_use": [
       {"tool_name": "refund_agent", "tool_input": {"request": "refund Wireless Headphones Pro from order ORD-67890, reason: damaged"}}
     ]
+  },
+  {
+    "prompt": "Track my order ORD-12345 and give me the live courier status for its FedEx tracking number.",
+    "reference": "Your order ORD-12345 is being tracked with track_order, and the live FedEx courier status from track_shipment shows: In transit — Departed FedEx hub.",
+    "expected_tool_use": [
+      {"tool_name": "order_agent", "tool_input": {"request": "track order ORD-12345 with track_order, then get live FedEx courier status with track_shipment (requires MCP_FEDEX_URL on the target engine)"}}
+    ]
   }
 ]

@@ -26,6 +26,8 @@ make deploy-agent-engine ENV=dev     # deploy/update Agent Engine (deployment/de
 make seed-db ENV=dev                 # Firestore fixtures; then add-embeddings, vector-index
 make infra-up ENV=dev                # terraform init + apply (first time: bootstrap-tfstate ENV=dev)
 make sync-tfvars ENV=dev             # push local tfvars to GCS so Cloud Build sees them
+make deploy-mcp-fedex ENV=dev        # deploy FedEx tracking MCP server to Cloud Run
+make setup-gateway ENV=dev           # egress Agent Gateway + Registry entries for FedEx MCP
 ```
 
 Environment config lives in `.env` / `.env.dev` / `.env.staging` / `.env.prod` (gitignored); `ENV=<env>` on make targets selects the file. `customer_support_mas/config.py` raises at import if `GOOGLE_CLOUD_PROJECT` is unset, so any script importing the package needs the env loaded. `GOOGLE_GENAI_USE_VERTEXAI=True` is required for all Vertex AI paths.
@@ -47,7 +49,7 @@ Environment config lives in `.env` / `.env.dev` / `.env.staging` / `.env.prod` (
 
 **CI/CD** (`cloudbuild/`, see `docs/CI_CD.md`): single `main` branch, promotion by git tag. Push to main → dev deploy; `v*-rc.*` → staging (+ Locust load test); `v*.*.*` → prod via `release.yaml`: new Agent Engine per release → Cloud Run shadow revision (`--no-traffic`) → smoke test → eval gate (absolute thresholds + regression vs a baseline that only updates on pass) → 10% canary. The canary quality check (`canary-quality-check.yaml`, scheduled or `make nightly`) pulls real sessions for canary and champion via the Sessions API and compares agentic-quality scores (absolute floor + relative-to-champion). Note: the Sessions API carries no revision attribution — canary/champion separation works only because each release is a separate Agent Engine resource; Agent Engine's native runtimeRevisions/traffic-split feature (v1beta1) was evaluated and can't support this gate.
 
-**Terraform** (`terraform/`): shared `modules/core` (apis, iam, infrastructure, cicd, model_armor, monitoring, secrets) instantiated per env under `environments/{dev,staging,prod}`. State and tfvars live in GCS (`<project>-tf-state`); Cloud Build reads tfvars from GCS, so run `make sync-tfvars` after local tfvars edits. IAM uses additive `google_project_iam_member` only.
+**Terraform** (`terraform/`): shared `modules/core` (apis, iam, infrastructure, cicd, model_armor, monitoring, secrets) instantiated per env under `environments/{dev,staging,prod}`. State and tfvars live in GCS (`<project>-tf-state`); Cloud Build reads tfvars from GCS, so run `make sync-tfvars` after local tfvars edits. IAM uses additive `google_project_iam_member` only. The order agent optionally consumes a FedEx MCP server (`mcp_servers/fedex_tracking/`), env-gated by `MCP_FEDEX_URL`, governed per `docs/MCP_FEDEX.md`.
 
 ## Reference docs mirror
 

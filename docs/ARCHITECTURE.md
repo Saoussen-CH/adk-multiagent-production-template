@@ -768,7 +768,14 @@ customer_support_mas/
 │   └── safety_util.py
 └── services/
     └── rag_search.py        # Firestore vector search
+
+mcp_servers/
+└── fedex_tracking/          # FedEx tracking MCP server (FastMCP, streamable-http)
+    ├── server.py             # track_shipment tool (read-only), deployed to Cloud Run
+    └── fedex_client.py        # FedEx Track API client with deterministic FEDEX_MOCK fixtures
 ```
+
+The order agent optionally attaches this MCP server as a tool via ADK's `McpToolset`, gated by the `MCP_FEDEX_URL` env var so agents without it are byte-for-byte unchanged. See [`docs/MCP_FEDEX.md`](./MCP_FEDEX.md) for deployment, mock mode, and Agent Gateway egress governance.
 
 **Test/eval files** (not shipped in production package):
 ```
