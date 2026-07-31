@@ -43,7 +43,7 @@ import pandas as pd
 import vertexai
 from dotenv import load_dotenv
 from google.genai import types as genai_types
-from vertexai import Client, agent_engines, types
+from vertexai import Client, types
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -137,6 +137,7 @@ def run_inference(client: Client, agent_engine_id: str, dataset: pd.DataFrame):
 
 
 def run_custom_inference(
+    client: Client,
     agent_engine_id: str,
     dataset: pd.DataFrame,
     delay: float = 3.0,
@@ -160,7 +161,7 @@ def run_custom_inference(
         EvaluationDataset with response and intermediate_events populated.
     """
     logger.info("Running custom inference against: %s", agent_engine_id)
-    agent_engine = agent_engines.get(agent_engine_id)
+    agent_engine = client.agent_engines.get(name=agent_engine_id)
 
     prompts = dataset["prompt"].tolist()
     refs = dataset.get("reference", pd.Series([""] * len(dataset))).tolist()
@@ -364,25 +365,18 @@ def run_evaluation(
     # -------------------------------------------------------------------------
     logger.info("Running evaluate() for scoring...")
 
-    agent_name = "customer_support"
-    agent_instruction = "You are a customer support coordinator. Route queries to the right " "specialist agent."
-    try:
-        from customer_support_mas.agents.root.agent import root_agent as _ra
-
-        agent_name = _ra.name
-        agent_instruction = _ra.instruction or agent_instruction
-    except Exception as _e:
-        logger.warning("Could not import root_agent: %s — using defaults", _e)
-
-    # NOTE: agent_resource_name is intentionally omitted.
+    # NOTE: agent_resource_name is intentionally omitted from AgentInfo.
     # When provided, evaluate() re-runs its own SDK-based inference which
     # breaks on multi-agent AgentTool patterns and returns empty responses.
     # Without it, evaluate() uses our pre-computed responses and
     # intermediate_events from the custom async_stream_query() adapter.
-    agent_info = types.evals.AgentInfo(
-        name=agent_name,
-        instruction=agent_instruction,
-    )
+    #
+    # AgentInfo construction is shared with tests/eval_agent_platform.py's
+    # build_agent_info() — see its docstring for why this can't be the old
+    # flat name=/instruction= constructor (schema changed in SDK >=1.160.0).
+    from tests.eval_agent_platform import build_agent_info
+
+    agent_info = build_agent_info()
 
     eval_config = types.EvaluateMethodConfig(dest=gcs_dest) if gcs_dest else None
     evaluation_result = client.evals.evaluate(
@@ -862,7 +856,7 @@ def main():
     dataset = load_dataset(args.dataset)
 
     # Resolve full resource name for the Agent Engine.
-    # agent_engines.get() accepts short numeric IDs but AgentInfo requires
+    # client.agent_engines.get() accepts short numeric IDs but AgentInfo requires
     # the full "projects/.../locations/.../reasoningEngines/..." resource name.
     # Prefer the AGENT_ENGINE_RESOURCE_NAME env var (set in .env) over the
     # short numeric ID passed via --agent-engine-id.
@@ -873,8 +867,8 @@ def main():
         logger.info("Using AGENT_ENGINE_RESOURCE_NAME from .env: %s", agent_engine_id)
     agent_resource_name = agent_engine_id  # fallback
     try:
-        ae_obj = agent_engines.get(agent_engine_id)
-        resolved = getattr(ae_obj, "resource_name", None) or getattr(ae_obj, "name", None)
+        ae_obj = client.agent_engines.get(name=agent_engine_id)
+        resolved = ae_obj.api_resource.name
         if resolved and resolved.startswith("projects/"):
             agent_resource_name = resolved
             logger.info("Resolved full resource name: %s", agent_resource_name)
@@ -924,6 +918,7 @@ def main():
     else:
         logger.info("Using custom async_stream_query() adapter")
         dataset_with_inference = run_custom_inference(
+            client,
             agent_engine_id,
             dataset,
             delay=args.delay,

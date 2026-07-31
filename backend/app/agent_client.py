@@ -6,7 +6,7 @@ from typing import Optional
 
 import vertexai
 from google.api_core import exceptions, retry
-from vertexai import agent_engines
+from vertexai import Client
 
 from .config import settings
 from .logging_config import get_logger
@@ -110,6 +110,10 @@ class AgentEngineClient:
             project=settings.google_cloud_project,
             location=settings.google_cloud_location,
         )
+        self._client = Client(
+            project=settings.google_cloud_project,
+            location=settings.google_cloud_location,
+        )
         self.resource_name = settings.agent_engine_resource_name
         self._remote_app = None
 
@@ -117,7 +121,7 @@ class AgentEngineClient:
         """Lazily connect to Agent Engine on first use."""
         if self._remote_app is None:
             try:
-                self._remote_app = agent_engines.get(self.resource_name)
+                self._remote_app = self._client.agent_engines.get(name=self.resource_name)
                 self.agent_engine_app = self._remote_app  # Alias for health checks
                 logger.info("Connected to Agent Engine", resource_name=self.resource_name)
             except Exception as e:

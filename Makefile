@@ -61,8 +61,8 @@ help: ## Show this help message
 	@echo "  make test-unit EVAL_PROFILE=standard   # unit eval with standard profile"
 	@echo "  make gen-evalset AGENT=order           # generate order agent eval dataset"
 	@echo "  make eval-post-deploy AGENT_ENGINE_ID=1234567890"
-	@echo "  make nightly                                    # run all steps (post-deploy off)"
-	@echo "  make nightly RUN_INTEGRATION_TESTS=false RUN_POST_DEPLOY_EVAL=true"
+	@echo "  make nightly                                    # run canary quality check now"
+	@echo "  make nightly MIN_SESSIONS=50 SINCE=1d           # override thresholds"
 	@echo ""
 
 # ==============================================================================
@@ -204,6 +204,41 @@ eval-post-deploy: ## Evaluate deployed Agent Engine (use ENV=staging|prod; AGENT
 		--delay $(DELAY)
 
 # ==============================================================================
+# AGENT PLATFORM QUALITY FLYWHEEL — synthetic multi-turn eval + loss clusters
+# (complementary to eval-post-deploy above, not a replacement — see
+#  tests/eval_agent_platform.py module docstring)
+# ==============================================================================
+
+eval-flywheel-local: ## Synthetic multi-turn eval against the in-process agent (COUNT, MAX_TURN optional)
+	PYTHONPATH=. $(PYTHON) tests/eval_agent_platform.py local \
+		--count $(if $(COUNT),$(COUNT),5) \
+		--max-turn $(if $(MAX_TURN),$(MAX_TURN),5) \
+		--output results/flywheel_local.json
+
+eval-flywheel-cloud: ## Synthetic multi-turn eval against the deployed Agent Engine (use ENV=staging|prod; DEST required)
+	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
+	@AGENT_ID="$(AGENT_ENGINE_RESOURCE_NAME)"; \
+	if [ -z "$$AGENT_ID" ]; then AGENT_ID="$(AGENT_ENGINE_ID)"; fi; \
+	if [ -z "$$AGENT_ID" ] && [ -f $(ENV_FILE) ]; then \
+		AGENT_ID=$$(grep '^AGENT_ENGINE_RESOURCE_NAME=' $(ENV_FILE) | cut -d= -f2-); \
+	fi; \
+	if [ -z "$$AGENT_ID" ]; then \
+		echo "Error: AGENT_ENGINE_ID or AGENT_ENGINE_RESOURCE_NAME is required."; \
+		exit 1; \
+	fi; \
+	if [ -z "$(DEST)" ]; then \
+		echo "Error: DEST (GCS path for eval run results) is required."; \
+		echo "Usage: make eval-flywheel-cloud ENV=staging DEST=gs://your-bucket/eval-runs"; \
+		exit 1; \
+	fi; \
+	set -a && . ./$(ENV_FILE) && set +a && PYTHONPATH=. $(PYTHON) tests/eval_agent_platform.py cloud \
+		--agent-engine-id "$$AGENT_ID" \
+		--dest "$(DEST)" \
+		--count $(if $(COUNT),$(COUNT),5) \
+		--max-turn $(if $(MAX_TURN),$(MAX_TURN),5) \
+		--output results/flywheel_cloud.json
+
+# ==============================================================================
 # FRONTEND
 # ==============================================================================
 
@@ -292,25 +327,19 @@ deploy-agent-engine: ## Deploy agent to Vertex AI Agent Engine (use ENV=staging|
 deploy-cloud-run: ## Build and deploy backend to Cloud Run
 	bash deployment/deploy-cloudrun.sh
 
-nightly: ## Trigger ci-manual Cloud Build with selective step flags
-	@# Defaults: all steps on, post-deploy off. Override with RUN_LINT=false, RUN_UNIT_TESTS=false, etc.
-	@# RUN_POST_DEPLOY_EVAL=true requires AGENT_ENGINE_ID (or AGENT_ENGINE_RESOURCE_NAME in .env)
+nightly: ## Trigger the canary quality check Cloud Build job (real-traffic agentic eval vs champion)
+	@# Override with SINCE=1d, MIN_SESSIONS=50, RELATIVE_THRESHOLD=0.15, ABSOLUTE_FLOOR=0.5
 	@PROJECT_ID=$$(grep '^GOOGLE_CLOUD_PROJECT=' .env | cut -d= -f2-); \
 	STAGING_BUCKET=$$(grep '^GOOGLE_CLOUD_STORAGE_BUCKET=' .env | cut -d= -f2-); \
-	RUN_LINT_VAL="$(if $(RUN_LINT),$(RUN_LINT),true)"; \
-	RUN_TOOL_VAL="$(if $(RUN_TOOL_TESTS),$(RUN_TOOL_TESTS),true)"; \
-	RUN_UNIT_VAL="$(if $(RUN_UNIT_TESTS),$(RUN_UNIT_TESTS),true)"; \
-	RUN_INT_VAL="$(if $(RUN_INTEGRATION_TESTS),$(RUN_INTEGRATION_TESTS),true)"; \
-	RUN_PD_VAL="$(if $(RUN_POST_DEPLOY_EVAL),$(RUN_POST_DEPLOY_EVAL),false)"; \
-	AGENT_ID="$(AGENT_ENGINE_ID)"; \
-	if [ -z "$$AGENT_ID" ] && [ -f .env ]; then \
-		AGENT_ID=$$(grep '^AGENT_ENGINE_RESOURCE_NAME=' .env | cut -d= -f2-); \
-	fi; \
-	gcloud builds triggers run ci-manual \
+	SINCE_VAL="$(if $(SINCE),$(SINCE),2h)"; \
+	MIN_SESSIONS_VAL="$(if $(MIN_SESSIONS),$(MIN_SESSIONS),20)"; \
+	RELATIVE_THRESHOLD_VAL="$(if $(RELATIVE_THRESHOLD),$(RELATIVE_THRESHOLD),0.10)"; \
+	ABSOLUTE_FLOOR_VAL="$(if $(ABSOLUTE_FLOOR),$(ABSOLUTE_FLOOR),0.60)"; \
+	gcloud builds triggers run canary-quality-check \
 		--project="$$PROJECT_ID" \
 		--region=us-central1 \
 		--branch=main \
-		--substitutions="_RUN_LINT=$$RUN_LINT_VAL,_RUN_TOOL_TESTS=$$RUN_TOOL_VAL,_RUN_UNIT_TESTS=$$RUN_UNIT_VAL,_RUN_INTEGRATION_TESTS=$$RUN_INT_VAL,_RUN_POST_DEPLOY_EVAL=$$RUN_PD_VAL,_AGENT_ENGINE_ID=$$AGENT_ID,_STAGING_BUCKET=$$STAGING_BUCKET"
+		--substitutions="_STAGING_BUCKET=$$STAGING_BUCKET,_CANARY_CHECK_SINCE=$$SINCE_VAL,_CANARY_CHECK_MIN_SESSIONS=$$MIN_SESSIONS_VAL,_CANARY_CHECK_RELATIVE_THRESHOLD=$$RELATIVE_THRESHOLD_VAL,_CANARY_CHECK_ABSOLUTE_FLOOR=$$ABSOLUTE_FLOOR_VAL"
 
 submit-build: ## Submit full CI+CD pipeline to Cloud Build (DEPLOY_AGENT_ENGINE=true to also redeploy agent)
 	@PROJECT_ID=$$(grep '^GOOGLE_CLOUD_PROJECT=' .env | cut -d= -f2-); \

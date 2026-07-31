@@ -1,7 +1,7 @@
 # ==============================================================================
 # STAGING environment — rc tag (v*.*.*-rc.*) deploys to staging GCP project
 # Mirrors prod config (INSPECT_AND_BLOCK, delete protection) for accurate testing.
-# No nightly scheduler — that runs in prod only.
+# No canary quality check scheduler — that runs in prod only.
 # ==============================================================================
 # Usage:
 #   make bootstrap-tfstate ENV=staging   # one-time: create GCS bucket + upload tfvars

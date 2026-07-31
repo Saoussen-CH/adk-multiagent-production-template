@@ -5,18 +5,19 @@
 This document describes the 5-stage production evaluation architecture for the Customer Support Multi-Agent System. Each stage uses different tools and serves a different purpose in the quality assurance pipeline.
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│                    EVALUATION PIPELINE                            │
-│                                                                   │
-│  Stage 1       Stage 2       Stage 3       Stage 4       Stage 5 │
-│  ┌─────┐      ┌─────┐      ┌─────┐      ┌─────┐      ┌─────┐   │
-│  │LOCAL│──────│ CI  │──────│STAGE│──────│PROD │──────│NIGHT│   │
-│  │ DEV │      │PIPE │      │EVAL │      │GATE │      │ LY  │   │
-│  └─────┘      └─────┘      └─────┘      └─────┘      └─────┘   │
-│  ADK local    ADK+pytest   Vertex AI    Vertex AI    Vertex AI  │
-│  InMemory     InMemory     Eval Svc     Eval Svc     Eval Svc   │
-│  Runner       Runner       (deployed)   (deployed)   (scheduled)│
-└───────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                    EVALUATION PIPELINE                                 │
+│                                                                        │
+│  Stage 1       Stage 2       Stage 3       Stage 4       Stage 5      │
+│  ┌─────┐      ┌─────┐      ┌─────┐      ┌─────┐      ┌───────────┐   │
+│  │LOCAL│──────│ CI  │──────│STAGE│──────│PROD │──────│  CANARY   │   │
+│  │ DEV │      │PIPE │      │EVAL │      │GATE │      │ QUALITY   │   │
+│  └─────┘      └─────┘      └─────┘      └─────┘      │  CHECK    │   │
+│  ADK local    ADK+pytest   Vertex AI    Vertex AI    └───────────┘   │
+│  InMemory     InMemory     Eval Svc     Eval Svc     Sessions API +  │
+│  Runner       Runner       (deployed)   (deployed)   agentic rubric  │
+│                                                       (scheduled)     │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Stage Summary
@@ -27,9 +28,13 @@ This document describes the 5-stage production evaluation architecture for the C
 | 2 | CI Pipeline | ADK AgentEvaluator + pytest | Every PR and push |
 | 3 | Post-Deploy Eval | Vertex AI Gen AI Eval Service | After deploy to staging or prod |
 | 4 | Production Pre-Canary Eval Gate | Vertex AI Gen AI Eval Service | After shadow deploy to prod, before canary enable |
-| 5 | Nightly Regression | Vertex AI Gen AI Eval Service | Cloud Scheduler (midnight UTC) |
+| 5 | Canary Quality Check | Vertex AI Gen AI Eval Service + Agent Engine Sessions API | Cloud Scheduler (midnight UTC), while a canary is live |
 
-Stages 3, 4, and 5 use the same script (`tests/eval_vertex.py`) against the live Agent Engine. Stage 3 runs after staging deploy; Stage 4 runs against the prod shadow revision before canary is enabled; Stage 5 runs on a nightly schedule.
+Stages 3 and 4 use `tests/eval_vertex.py` against the live Agent Engine with a **fixed hand-authored dataset**: Stage 3 runs after staging deploy; Stage 4 runs against the prod shadow revision before canary is enabled, and additionally compares against the baseline from the last release that passed this gate (last known-good release, not a rolling window).
+
+Stage 5 is a different kind of check, using `tests/eval_agent_platform.py`'s `canary-check` mode: it pulls **real production conversations** (not a fixed dataset) from both the champion and canary Agent Engines via the Sessions API, and scores them on agentic-behavior rubrics (task success, tool use quality, safety). This exists because a fixed dataset can only tell you the agent still handles the cases someone thought to write down — it can't tell you how the agent is actually doing against the traffic it's serving right now. It also deliberately does not use infra-health signals (HTTP error rate, latency): those confirm the server is up, not that a multi-agent system is behaving correctly, which is a different question for a MAS than for typical web traffic.
+
+**Optional, complementary layer:** Stage 5 only runs while a canary is live. Nothing above continuously watches the standing champion for *slow* drift between releases — see [Ambient Drift Monitoring](#ambient-drift-monitoring-online-monitor--quality-alerts) below for that (Online Monitor + a Terraform-managed Cloud Monitoring alert).
 
 ---
 
@@ -68,8 +73,8 @@ EVAL_PROFILE=fast pytest tests/unit/ -v -s
 
 **Metrics:** Vary by profile:
 - `fast` (PR): Rouge-1 only: free, fast
-- `standard` (push to main): + tool trajectory (unit), rubric-based LLM judge (integration)
-- `full` (nightly/release): + final_response_match_v2
+- `standard` (push to main / release): + tool trajectory (unit), rubric-based LLM judge (integration)
+- `full` (deeper post-deploy checks): + final_response_match_v2
 
 **CI/CD mapping:**
 | Event | Profile | Gate |
@@ -78,8 +83,8 @@ EVAL_PROFILE=fast pytest tests/unit/ -v -s
 | PR to `main` (agent code changed) | `standard` | Must pass to merge (auto-detected) |
 | Push to `main` (dev deploy) | `standard` | Blocks deployment |
 | Tag `v*.*.*-rc.*` (staging) | `standard` | Blocks staging deploy |
-| Tag `v*.*.*` (prod release) | `standard` | Post-deploy eval gates canary enable |
-| Nightly | `full` | Regression monitoring vs GCS baseline |
+| Tag `v*.*.*` (prod release) | `standard` | Post-deploy eval gates canary enable, vs last known-good release baseline |
+| Canary quality check | n/a (agentic rubric metrics) | Real-traffic eval drives promote/rollback while a canary is live |
 
 **How to run:**
 ```bash
@@ -168,7 +173,7 @@ python tests/eval_vertex.py \
 | `--inspect-sdk-events` | none | Run SDK inference, dump raw `intermediate_events` to FILE, then exit (format research) |
 | `--sdk-inference` | off | Legacy alias for `--custom-inference` |
 | `--update-baseline` | none | GCS path to baseline JSON (`gs://...`). Compares composite score; saves updated baseline on pass; exits 1 on regression |
-| `--regression-threshold` | `0.10` | Max allowed relative composite score drop vs baseline (nightly only) |
+| `--regression-threshold` | `0.10` | Max allowed relative composite score drop vs the last known-good release baseline (release + release-staging gates) |
 
 **Key files:**
 - `tests/eval_vertex.py`: main eval script
@@ -240,21 +245,29 @@ Before running post-deploy eval:
 3. **GCS bucket** for report upload: set `GOOGLE_CLOUD_STORAGE_BUCKET` in `.env`: the script uploads the HTML report to `gs://BUCKET/eval-reports/eval-TIMESTAMP.html` and records the URI in the Vertex AI Experiments run. Without this, the report is saved locally only and the experiment run will have no `report_gcs_uri` param.
 4. **Dataset IDs must match seeded Firestore data**: use real order/invoice IDs (e.g., `ORD-12345`, `ORD-67890`, `INV-2025-001`), not placeholder IDs
 
-### AgentInfo Workaround
+### AgentInfo Construction
 
-The eval service requires `AgentInfo` to provide tool declarations and agent instructions. The standard method `AgentInfo.load_from_agent()` fails for this project because:
-- ADK `PreloadMemoryTool` lacks `__globals__` → `typing.get_type_hints()` crashes
-- Sub-agents wrapped as `AgentTool` cause recursive introspection failures
+The eval service requires `AgentInfo` to provide tool declarations and agent instructions. On `google-cloud-aiplatform>=1.160.0` the `AgentInfo` schema changed to a hierarchical `agents: dict[str, AgentConfig]` + `root_agent_id` shape — the old flat `AgentInfo(name=..., instruction=...)` constructor now raises a pydantic `extra_forbidden` validation error.
 
-The script builds `AgentInfo` manually instead, intentionally omitting `agent_resource_name`:
+`AgentInfo.load_from_agent()` — previously broken for this project on older SDK versions (ADK `PreloadMemoryTool` lacked `__globals__`, and `AgentTool`-wrapped sub-agents caused recursive introspection failures) — has been verified to work on `>=1.160.0`. It does not recurse into `AgentTool`-wrapped sub-agents as separate `agents` entries (this codebase uses agents-as-tools, not ADK's native `sub_agents=[...]` hierarchy), but each sub-agent's instruction/description is still captured as a `FunctionDeclaration` in the root's `tools` list, which is enough context for scoring.
+
+Both `tests/eval_vertex.py` and `tests/eval_agent_platform.py` share one helper — `build_agent_info()` in `eval_agent_platform.py` — which tries `load_from_agent()` first and falls back to manually constructing the new schema shape if it ever fails:
 ```python
-agent_info = types.evals.AgentInfo(
-    name=root_agent.name,
-    instruction=root_agent.instruction or "",
-    # agent_resource_name is intentionally omitted: when set, evaluate() re-runs
-    # its own SDK inference which breaks on AgentTool and returns empty responses.
-)
+try:
+    return types.evals.AgentInfo.load_from_agent(agent=root_agent)
+except Exception:
+    return types.evals.AgentInfo(
+        name=root_agent.name,
+        root_agent_id=root_agent.name,
+        agents={root_agent.name: types.evals.AgentConfig(
+            agent_id=root_agent.name,
+            agent_type="LlmAgent",
+            instruction=root_agent.instruction or "",
+        )},
+    )
 ```
+
+`agent_resource_name` is intentionally omitted in both paths: when set, `evaluate()` re-runs its own SDK inference which breaks on `AgentTool` and returns empty responses.
 
 ---
 
@@ -278,32 +291,78 @@ python tests/eval_vertex.py \
 
 ---
 
-## Stage 5: Nightly Regression
+## Stage 5: Canary Quality Check
 
-**Purpose:** Detect model drift and quality degradation over time. Also drives canary promotion/rollback.
+**Purpose:** While a canary is live, continuously verify it's behaving correctly on **real production traffic** — not a fixed dataset — and drive promote/rollback automatically. A fixed dataset (Stages 3/4) only proves the agent still handles cases someone thought to write down; it can't observe how the agent is actually doing against the traffic it's serving right now.
 
-**Tools:** Same as Stage 3 (`eval_vertex.py`), run on a schedule via Cloud Scheduler
+**Tools:** `tests/eval_agent_platform.py`'s `canary-check` mode — Agent Engine Sessions API + Vertex AI Gen AI Eval Service multi-turn rubric metrics, run on a schedule via Cloud Scheduler (or manually).
 
 **How the decision works:**
 
-Scores are combined into a **composite weighted score**: Tool Use Quality (40%) + Final Response Quality (40%) + Hallucination (10%) + Safety (10%). This absorbs LLM judge variance across metrics — a single-case flip in one metric won't trigger a false rollback.
+1. Resolve both the champion and canary Agent Engine resource names from the current Cloud Run traffic split (canary = `sha-*` tag with partial traffic; champion = highest-traffic revision). If no canary is live, no-op.
+2. Pull real sessions for **each** engine via `client.agent_engines.sessions` since `--since` (e.g. last 2h), excluding synthetic eval sessions.
+3. Score each engine's real conversations on agentic rubric metrics: `MULTI_TURN_TASK_SUCCESS`, `MULTI_TURN_TOOL_USE_QUALITY`, `MULTI_TURN_SAFETY`.
+4. Compare canary vs champion scores on that same real-traffic window:
+   - Canary within `--relative-threshold` (default 0.10) of champion AND above `--absolute-floor` (default 0.60) → **promote** (exit 0)
+   - Canary regressed beyond either threshold → **rollback** (exit 1)
+   - Fewer than `--min-sessions` (default 20) real sessions on either engine → **hold**, no decision yet (exit 2)
 
-The composite score is compared against the GCS baseline (`$_STAGING_BUCKET/baselines/nightly-baseline.json`). If the relative drop exceeds `_REGRESSION_THRESHOLD` (default 10%), the build fails and the canary is rolled back.
+There is no persistent baseline file here (unlike Stages 3/4) — each run compares canary and champion against each other on the same real traffic window, so there's nothing to go stale or need resetting after a rollback.
 
-**Agent Engine resolution:** The nightly reads `AGENT_ENGINE_RESOURCE_NAME` directly from the active Cloud Run revision's env vars — canary if one is live, champion otherwise. This is always accurate and self-corrects after rollback without manual intervention.
+**Why not infra-health metrics (error rate, latency)?** Those confirm the server didn't crash — they say nothing about whether a multi-agent system routed correctly, respected a workflow's gates, or hallucinated an answer. That's a materially different question for a MAS than for typical web traffic, so canary promotion here is driven by agentic quality metrics, not SLOs.
 
 **How to run:**
 ```bash
-# Nightly full regression (manual trigger)
-python tests/eval_vertex.py \
-    --agent-engine-id ENGINE_ID \
-    --profile full \
-    --custom-inference \
-    --output /workspace/eval_scores.json \
-    --update-baseline gs://YOUR_BUCKET/baselines/nightly-baseline.json \
-    --regression-threshold 0.10 \
-    --delay 5
+# Canary quality check (manual trigger)
+python tests/eval_agent_platform.py canary-check \
+    --canary-engine-id CANARY_ENGINE_ID \
+    --champion-engine-id CHAMPION_ENGINE_ID \
+    --since 2h \
+    --min-sessions 20 \
+    --relative-threshold 0.10 \
+    --absolute-floor 0.60 \
+    --output /workspace/canary_check_result.json
 ```
+
+---
+
+## Ambient Drift Monitoring (Online Monitor + Quality Alerts)
+
+**Purpose:** Detect *slow* quality drift on the long-lived, already-promoted champion between releases — weeks of shifting user behavior, not a release event. This is a different failure mode than Stage 5: canary-quality-check's job ends the moment a canary is promoted or there's no canary live; nothing else in this pipeline continuously watches the standing champion in between releases. This layer fills that gap.
+
+**Tools:** Gemini Enterprise Agent Platform's **Online Monitors** (continuous eval over live production traces, exported to Cloud Monitoring) + a Terraform-managed **Cloud Monitoring alert policy** (`terraform/modules/core/monitoring.tf`).
+
+**Why this is split into a manual step + a Terraform-managed step:**
+
+Online Monitor *creation* has no API — no Terraform resource, no `gcloud` command, no SDK method (confirmed by SDK introspection: no `OnlineEvaluator`-related methods exist anywhere in `google-cloud-aiplatform`). It's console-only. That also means it can't be automatically re-pointed after a release promotes a new Agent Engine resource to champion — this repo creates a **new** resource on every release (not same-resource revisions), so the monitor needs re-pointing (or recreating) each time. This is the reason it wasn't used for canary promotion itself (see the canary-quality-check design above) — but it's still worth the manual upkeep for slow, ambient drift detection on the champion, which nothing else here does.
+
+The alert policy that watches the monitor's exported metric, however, is a normal Cloud Monitoring resource with a real API — that part **is** Terraform-managed and needs no manual upkeep once created.
+
+**One-time (and post-release) manual setup:**
+
+1. In the Google Cloud console: **Agent Platform → Agents → Evaluation → Online monitors → New monitor**.
+2. Select the current champion Agent Engine, choose **All traces** (or a filter), and configure metrics — at minimum **Task Success** (matches the alert policy below); optionally add **Tool Use Quality** and **Safety**.
+3. Set a sampling percentage and a max-samples-per-run cap to control eval cost.
+4. Telemetry prerequisites are already set on every deploy (`deployment/deploy.py`'s `ENV_VARS`: `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=EVENT_ONLY`) — no extra deploy-side change needed.
+5. **After any release that promotes a new champion**, repeat step 2 pointed at the new resource (or duplicate and edit the existing monitor). There's no notification when this goes stale — it's a manual runbook step, not something CI enforces.
+
+**Terraform-managed alerting (once, per environment):**
+
+```hcl
+# terraform/environments/prod/terraform.tfvars
+enable_quality_alerts                = true
+quality_alert_task_success_threshold = 0.60
+quality_alert_notification_channels  = ["projects/YOUR_PROJECT_ID/notificationChannels/YOUR_CHANNEL_ID"]
+```
+
+```bash
+make sync-tfvars ENV=prod
+make infra-up ENV=prod
+```
+
+This creates a `google_monitoring_alert_policy` that fires if the Online Monitor's `task_success` score averages below the threshold for 30+ minutes (`aiplatform.googleapis.com/online_evaluator/scores`, `evaluation_metric_name="task_success"`). It's inert — no data, no false alerts — until an Online Monitor actually exists and is exporting scores; enabling it before step 1-4 above is harmless but pointless.
+
+**Notification channels** are a separate, pre-existing Cloud Monitoring concept (email/Slack/Pub-Sub) — create them via **Monitoring → Alerting → Notification channels** in the console (or `google_monitoring_notification_channel` in Terraform, not included here since it typically needs external credentials like a Slack webhook) and pass their resource names into `quality_alert_notification_channels`.
 
 ---
 
@@ -337,11 +396,11 @@ All stages support the `EVAL_PROFILE` environment variable:
 
 **CI/CD mapping:**
 ```
-PR          → fast       (quick feedback, free)
-Push main   → standard   (balanced quality gate)
-Nightly     → full       (comprehensive regression)
-Release     → standard   (gates canary enable)
-Post-deploy → standard   (deployed agent quality)
+PR            → fast       (quick feedback, free)
+Push main     → standard   (balanced quality gate)
+Release       → standard   (gates canary enable, vs last known-good baseline)
+Post-deploy   → standard   (deployed agent quality)
+Canary check  → n/a        (agentic rubric metrics on real traffic, not a profile)
 ```
 
 ---

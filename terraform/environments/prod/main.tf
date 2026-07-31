@@ -36,20 +36,26 @@ module "core" {
   github_owner        = var.github_owner
 
   # Optional — override defaults as needed
-  region                     = var.region
-  firestore_location         = var.firestore_location
-  firestore_database_id      = var.firestore_database_id
-  ar_repo_name               = var.ar_repo_name
-  cloud_run_service_name     = var.cloud_run_service_name
-  github_repo                = var.github_repo
-  google_managed_sas_exist   = var.google_managed_sas_exist
-  github_connected           = var.github_connected
-  agent_engine_resource_name = var.agent_engine_resource_name
-  cloudbuild_connection_name = var.cloudbuild_connection_name
-  cloudbuild_repo_name       = var.cloudbuild_repo_name
-  model_armor_enabled            = var.model_armor_enabled
-  model_armor_floor_mode         = var.model_armor_floor_mode
-  tfstate_bucket_name            = var.tfstate_bucket_name
-  canary_traffic_percent         = var.canary_traffic_percent
-  nightly_regression_threshold   = var.nightly_regression_threshold
+  region                               = var.region
+  firestore_location                   = var.firestore_location
+  firestore_database_id                = var.firestore_database_id
+  ar_repo_name                         = var.ar_repo_name
+  cloud_run_service_name               = var.cloud_run_service_name
+  github_repo                          = var.github_repo
+  google_managed_sas_exist             = var.google_managed_sas_exist
+  github_connected                     = var.github_connected
+  agent_engine_resource_name           = var.agent_engine_resource_name
+  cloudbuild_connection_name           = var.cloudbuild_connection_name
+  cloudbuild_repo_name                 = var.cloudbuild_repo_name
+  model_armor_enabled                  = var.model_armor_enabled
+  model_armor_floor_mode               = var.model_armor_floor_mode
+  tfstate_bucket_name                  = var.tfstate_bucket_name
+  canary_traffic_percent               = var.canary_traffic_percent
+  canary_check_since                   = var.canary_check_since
+  canary_check_min_sessions            = var.canary_check_min_sessions
+  canary_check_relative_threshold      = var.canary_check_relative_threshold
+  canary_check_absolute_floor          = var.canary_check_absolute_floor
+  enable_quality_alerts                = var.enable_quality_alerts
+  quality_alert_task_success_threshold = var.quality_alert_task_success_threshold
+  quality_alert_notification_channels  = var.quality_alert_notification_channels
 }

@@ -19,6 +19,7 @@ from google.adk.tools.tool_context import ToolContext
 
 from customer_support_mas.auth import audit_log, verify_order_ownership
 from customer_support_mas.database import db_client
+from customer_support_mas.error_handling import tool_error_handler
 from customer_support_mas.validation import (
     validate_order_id,
     validate_refund_reason,
@@ -191,6 +192,7 @@ def get_acceptable_refund_reasons() -> dict:
 # =============================================================================
 
 
+@tool_error_handler
 def validate_refund_request(order_id: str, tool_context: ToolContext, item_ids: Optional[List[str]] = None) -> dict:
     """
     Step 1: Validate the refund request.
@@ -293,6 +295,7 @@ def validate_refund_request(order_id: str, tool_context: ToolContext, item_ids: 
     }
 
 
+@tool_error_handler
 def check_refund_eligibility(order_id: str, tool_context: ToolContext) -> dict:
     """
     Step 2: Check refund eligibility with DYNAMIC calculation.
@@ -413,6 +416,7 @@ def check_refund_eligibility(order_id: str, tool_context: ToolContext) -> dict:
     return result
 
 
+@tool_error_handler
 def process_refund(order_id: str, reason: str, tool_context: ToolContext) -> dict:
     """
     Step 3: Process the refund.
@@ -542,6 +546,7 @@ def process_refund(order_id: str, reason: str, tool_context: ToolContext) -> dic
 # =============================================================================
 
 
+@tool_error_handler
 def check_if_refundable(order_id: str, tool_context: ToolContext) -> dict:
     """
     Pre-check if an order is eligible for refund (before asking for reason).
@@ -699,6 +704,7 @@ def check_if_refundable(order_id: str, tool_context: ToolContext) -> dict:
     return result
 
 
+@tool_error_handler
 def get_refundable_items(order_id: str, tool_context: ToolContext) -> dict:
     """
     Get list of items in an order that can still be refunded.

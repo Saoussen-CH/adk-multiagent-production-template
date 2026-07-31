@@ -15,6 +15,7 @@ from customer_support_mas.auth import (
     requires_order_ownership,
 )
 from customer_support_mas.database import db_client
+from customer_support_mas.error_handling import tool_error_handler
 from customer_support_mas.validation import (
     validate_order_id,
     validation_error_response,
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+@tool_error_handler
 @requires_order_ownership
 def track_order(order_id: str, tool_context: ToolContext, _order_data: dict = None, **kwargs) -> dict:
     """Track an order by order ID. Only accessible if the order belongs to you.
@@ -56,6 +58,7 @@ def track_order(order_id: str, tool_context: ToolContext, _order_data: dict = No
     }
 
 
+@tool_error_handler
 @requires_order_ownership
 def get_order_details(order_id: str, tool_context: ToolContext, _order_data: dict = None, **kwargs) -> dict:
     """Get full details for a specific order. Only accessible if the order belongs to you.
@@ -95,6 +98,7 @@ def get_order_details(order_id: str, tool_context: ToolContext, _order_data: dic
 # =============================================================================
 
 
+@tool_error_handler
 @requires_authenticated_user
 def get_order_history(tool_context: ToolContext, _user_id: str = None, **kwargs) -> dict:
     """Get complete order history for the authenticated user with full details.
@@ -140,6 +144,7 @@ def get_order_history(tool_context: ToolContext, _user_id: str = None, **kwargs)
     }
 
 
+@tool_error_handler
 @requires_authenticated_user
 def get_my_order_history(tool_context: ToolContext, _user_id: str = None, **kwargs) -> dict:
     """Get order history summary for the authenticated user.

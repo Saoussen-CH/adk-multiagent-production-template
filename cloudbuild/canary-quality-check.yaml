@@ -1,0 +1,186 @@
+# Canary Quality Check — Triggered by Cloud Scheduler or manual dispatch
+#
+# Replaces the old cloudbuild-nightly.yaml, which re-ran the same fixed
+# 9-prompt regression dataset on a timer — a redundant repeat of the check
+# release.yaml's post-deploy-eval already runs at release time, and it never
+# tested real production traffic at all.
+#
+# This job compares a live canary against its champion on REAL production
+# traffic, scored on AGENTIC BEHAVIOR (task success, tool use quality,
+# safety) via tests/eval_agent_platform.py's `canary-check` mode — not
+# infra health. Latency/error rate tell you the server didn't crash; they
+# tell you nothing about whether the agent routed correctly, respected the
+# refund workflow's gates, or hallucinated an answer. Real sessions are
+# pulled via the Agent Engine Sessions API (client.agent_engines.sessions),
+# which — unlike Online Monitors — has a genuine per-resource API and can be
+# pointed at this specific canary automatically, release after release.
+#
+# If no canary is currently live (champion at 100% traffic), this is a no-op.
+#
+# Decision (from canary-check's exit code):
+#   0 (promote)  — canary holds up on real traffic vs champion; promote to 100%
+#   1 (rollback) — canary regressed on real traffic; roll back to champion, alert
+#   2 (hold)     — not enough real sessions yet to decide; do nothing, re-check next run
+#
+# Substitutions (set in Cloud Build trigger config):
+#   _STAGING_BUCKET             — GCS bucket for eval artifacts (gs://...)
+#   _CANARY_CHECK_SINCE         — how far back to look for real sessions (e.g. "2h")
+#   _CANARY_CHECK_MIN_SESSIONS  — minimum real sessions required per engine before deciding
+
+substitutions:
+  _PYTHON_VERSION: "3.11"
+  _FIRESTORE_DATABASE: "customer-support-db"
+  _GOOGLE_CLOUD_LOCATION: "us-central1"
+  _REGION: "us-central1"
+  _SERVICE_NAME: "customer-support-app"
+  _STAGING_BUCKET: ""
+  _CANARY_CHECK_SINCE: "2h"
+  _CANARY_CHECK_MIN_SESSIONS: "20"
+  _CANARY_CHECK_RELATIVE_THRESHOLD: "0.10"
+  _CANARY_CHECK_ABSOLUTE_FLOOR: "0.60"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  # ===========================================================================
+  # Install dependencies
+  # ===========================================================================
+  - id: "install-deps"
+    name: "python:${_PYTHON_VERSION}-slim"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        pip install uv --quiet &&
+        uv sync --frozen --group dev
+    waitFor: ["-"]
+
+  # ===========================================================================
+  # Detect whether a canary is currently live, and resolve both engine IDs
+  # from their respective Cloud Run revisions' env vars.
+  # No canary (champion at 100%) → nothing to check.
+  # ===========================================================================
+  - id: "resolve-engines"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        SERVICE_JSON=$(gcloud run services describe ${_SERVICE_NAME} \
+          --region="${_REGION}" --project="$PROJECT_ID" --format=json 2>/dev/null || echo "{}")
+
+        CHAMPION_REVISION=$(echo "$$SERVICE_JSON" | python3 -c "import json,sys;d=json.load(sys.stdin);t=sorted(d.get('status',{}).get('traffic',[]),key=lambda x:x.get('percent',0),reverse=True);print(t[0].get('revisionName','') if t else '')" 2>/dev/null || echo "")
+        CANARY_REVISION=$(echo "$$SERVICE_JSON" | python3 -c "import json,sys;d=json.load(sys.stdin);t=[x for x in d.get('status',{}).get('traffic',[]) if x.get('tag','').startswith('sha-') and 0<x.get('percent',0)<100];print(t[0].get('revisionName','') if t else '')" 2>/dev/null || echo "")
+
+        if [ -z "$$CANARY_REVISION" ]; then
+          echo "No canary currently live — nothing to check."
+          echo "none" > /workspace/canary_state.txt
+          exit 0
+        fi
+
+        echo "live" > /workspace/canary_state.txt
+        echo "$$CHAMPION_REVISION" > /workspace/champion_revision.txt
+        echo "$$CANARY_REVISION" > /workspace/canary_revision.txt
+
+        get_engine() {
+          gcloud run revisions describe "$1" \
+            --region="${_REGION}" --project="$PROJECT_ID" --format=json 2>/dev/null | \
+            python3 -c "import json,sys;d=json.load(sys.stdin);c=(d.get('containers') or d.get('spec',{}).get('containers',[{}]));e=c[0].get('env',[]) if c else [];r=[x.get('value','') for x in e if x.get('name')=='AGENT_ENGINE_RESOURCE_NAME'];print(r[0] if r else '')" 2>/dev/null || echo ""
+        }
+
+        CHAMPION_ENGINE=$(get_engine "$$CHAMPION_REVISION")
+        CANARY_ENGINE=$(get_engine "$$CANARY_REVISION")
+        echo "$$CHAMPION_ENGINE" > /workspace/champion_engine.txt
+        echo "$$CANARY_ENGINE" > /workspace/canary_engine.txt
+
+        echo "Champion revision: $$CHAMPION_REVISION -> engine: $$CHAMPION_ENGINE"
+        echo "Canary revision:   $$CANARY_REVISION -> engine: $$CANARY_ENGINE"
+    waitFor: ["-"]
+
+  # ===========================================================================
+  # Real-traffic agentic quality comparison (skipped entirely if no canary is live).
+  # ===========================================================================
+  - id: "canary-check"
+    name: "python:${_PYTHON_VERSION}-slim"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        export PATH="/workspace/.venv/bin:$$PATH"
+        if [ "$(cat /workspace/canary_state.txt)" = "none" ]; then
+          echo "No canary live — skipping."
+          echo "none" > /workspace/decision.txt
+          exit 0
+        fi
+
+        CANARY_ENGINE=$(cat /workspace/canary_engine.txt)
+        CHAMPION_ENGINE=$(cat /workspace/champion_engine.txt)
+
+        # Capture exit code without failing the step so act-on-decision can run.
+        set +e
+        python tests/eval_agent_platform.py canary-check \
+          --canary-engine-id "$$CANARY_ENGINE" \
+          --champion-engine-id "$$CHAMPION_ENGINE" \
+          --since "${_CANARY_CHECK_SINCE}" \
+          --min-sessions ${_CANARY_CHECK_MIN_SESSIONS} \
+          --relative-threshold ${_CANARY_CHECK_RELATIVE_THRESHOLD} \
+          --absolute-floor ${_CANARY_CHECK_ABSOLUTE_FLOOR} \
+          --output /workspace/canary_check_result.json
+        EXIT_CODE=$$?
+        set -e
+
+        if [ "$$EXIT_CODE" = "0" ]; then
+          echo "promote" > /workspace/decision.txt
+        elif [ "$$EXIT_CODE" = "1" ]; then
+          echo "rollback" > /workspace/decision.txt
+        else
+          echo "hold" > /workspace/decision.txt
+        fi
+    env:
+      - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+      - "GOOGLE_CLOUD_LOCATION=${_GOOGLE_CLOUD_LOCATION}"
+      - "FIRESTORE_DATABASE=${_FIRESTORE_DATABASE}"
+      - "GOOGLE_CLOUD_STORAGE_BUCKET=${_STAGING_BUCKET}"
+      - "GOOGLE_GENAI_USE_VERTEXAI=True"
+    waitFor: ["install-deps", "resolve-engines"]
+
+  # ===========================================================================
+  # Act on the decision: promote, rollback, or hold.
+  # ===========================================================================
+  - id: "act-on-decision"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        DECISION=$(cat /workspace/decision.txt)
+        echo "Decision: $$DECISION"
+
+        case "$$DECISION" in
+          none)
+            echo "No canary live — nothing to do."
+            ;;
+          hold)
+            echo "Not enough real sessions yet — holding, will re-check next run."
+            ;;
+          promote)
+            CANARY_REVISION=$(cat /workspace/canary_revision.txt)
+            echo "Promoting canary $$CANARY_REVISION to 100% (held up on real traffic vs champion)"
+            gcloud run services update-traffic ${_SERVICE_NAME} \
+              --region="${_REGION}" --project="$PROJECT_ID" \
+              --to-revisions="$$CANARY_REVISION=100"
+            ;;
+          rollback)
+            CHAMPION_REVISION=$(cat /workspace/champion_revision.txt)
+            echo "Rolling back: restoring $$CHAMPION_REVISION to 100%"
+            gcloud run services update-traffic ${_SERVICE_NAME} \
+              --region="${_REGION}" --project="$PROJECT_ID" \
+              --to-revisions="$$CHAMPION_REVISION=100"
+            echo "Regression detected on real traffic — see canary_check_result.json for details."
+            exit 1
+            ;;
+        esac
+    waitFor: ["canary-check"]
+
+timeout: "3600s"

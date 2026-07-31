@@ -7,8 +7,8 @@ The project uses **Google Cloud Build** for continuous integration and deploymen
 ```
 Push to main         ──► dev deploy (CI + CD on every push)
 Tag v*.*.*-rc.*      ──► staging: full deploy + load tests + post-deploy eval
-Tag v*.*.*           ──► prod: shadow deploy + post-deploy eval gate + canary enable
-Nightly (00:00 UTC)  ──► regression monitoring + canary promote or rollback
+Tag v*.*.*           ──► prod: shadow deploy + post-deploy eval gate (vs last known-good release) + canary enable
+Daily (00:00 UTC)    ──► canary quality check: real-traffic agentic eval vs champion, promote or rollback
 ```
 
 **Key design principles:**
@@ -16,8 +16,8 @@ Nightly (00:00 UTC)  ──► regression monitoring + canary promote or rollbac
 - Single `main` branch: no develop/staging branches to manage.
 - PRs auto-detect changes to `customer_support_mas/` and run integration tests automatically when agent files are touched. No manual trigger needed.
 - Git tags control all environment deployments beyond dev.
-- Every production release creates a **new Agent Engine** resource and a **zero-traffic Cloud Run shadow revision**. Eval runs against the shadow. Canary traffic is enabled only after eval passes.
-- Nightly eval monitors prod for regressions and auto-promotes or rolls back the canary.
+- Every production release creates a **new Agent Engine** resource and a **zero-traffic Cloud Run shadow revision**. Eval runs against the shadow, compared against the baseline from the last release that passed this gate. Canary traffic is enabled only after eval passes.
+- While a canary is live, a scheduled job pulls its REAL production sessions (via the Agent Engine Sessions API) and scores them on agentic behavior — task success, tool use quality, safety — against the same real traffic on the champion. It promotes, rolls back, or holds if not enough sessions have accumulated yet. This is deliberately *not* an infra-health check (error rate/latency): those tell you the server didn't crash, not whether a multi-agent system behaved correctly. See [EVALUATION.md](./EVALUATION.md).
 - Terraform is fully decoupled from app deployment.
 
 ---
@@ -29,7 +29,7 @@ cloudbuild/pr-checks.yaml          Fast CI on every PR to main
 cloudbuild/cloudbuild-deploy.yaml  CI + dev deploy on every push to main
 cloudbuild/release-staging.yaml    Staging release on tag v*.*.*-rc.*
 cloudbuild/release.yaml            Prod canary release on tag v*.*.*
-cloudbuild/cloudbuild-nightly.yaml Nightly regression monitor + canary decision
+cloudbuild/canary-quality-check.yaml  Real-traffic agentic eval of a live canary vs champion; promote/rollback
 cloudbuild/terraform-plan.yaml     Infra plan on every PR to main
 cloudbuild/terraform-apply.yaml    Infra apply on every push to main
 ```
@@ -106,22 +106,23 @@ install-deps
                       └── deploy-cloud-run  (--no-traffic --tag sha-SHORT_SHA)
                           └── get-shadow-url
                               └── smoke-test  (shadow URL, zero prod users)
-                                  └── post-deploy-eval
+                                  └── post-deploy-eval  (vs last known-good release baseline)
                                       └── enable-canary  (split traffic if eval passes)
                                           └── cleanup-old-engines  (keep 2 most recent)
 ```
 
-### cloudbuild-nightly.yaml (regression monitor + canary decision)
+### canary-quality-check.yaml (real-traffic agentic eval vs champion)
 
 ```
 install-deps ──────────┐
-resolve-engine-id ─────┴── post-deploy-eval  (eval agent engine, capture exit code)
-                               └── promote-or-rollback
-                                     pass N nights: promote canary to 100%, reset counter
-                                     regression:    rollback to champion, reset counter, fail build
+resolve-engines ───────┴── canary-check  (tests/eval_agent_platform.py canary-check, capture exit code)
+                               └── act-on-decision
+                                     exit 0 (promote): canary held up vs champion → promote to 100%
+                                     exit 1 (rollback): canary regressed → roll back to champion, fail build (alert)
+                                     exit 2 (hold): not enough real sessions yet → no-op, re-check next run
 ```
 
-`resolve-engine-id` reads `AGENT_ENGINE_RESOURCE_NAME` directly from the active Cloud Run revision's env vars: canary revision if one is live (`sha-*` tag, partial traffic), otherwise the champion. This is always accurate — the env var is the engine wired to that revision, and it self-corrects after rollback without any manual cleanup.
+`resolve-engines` reads `AGENT_ENGINE_RESOURCE_NAME` directly from both the champion and canary Cloud Run revisions' env vars (canary = `sha-*` tag with partial traffic; champion = highest-traffic revision). If no canary is live, the job no-ops. `canary-check` then pulls REAL sessions for each engine via the Agent Engine Sessions API (not a fixed dataset) and scores them on agentic behavior — see [EVALUATION.md](./EVALUATION.md) for why this replaced a fixed-dataset nightly rerun.
 
 ---
 
@@ -135,8 +136,8 @@ resolve-engine-id ─────┴── post-deploy-eval  (eval agent engine,
 | `ci-cd-push-main` | Push to `main` | dev | `cloudbuild-deploy.yaml` | `standard` | Yes (when relevant files changed) |
 | `release-staging` | Tag `v*.*.*-rc.*` | staging | `release-staging.yaml` | `standard` | Yes (always) |
 | `release` | Tag `v*.*.*` | prod | `release.yaml` | `standard` | Yes (always) |
-| `ci-manual` | Manual or nightly | prod | `cloudbuild-nightly.yaml` | `full` | No |
-| Cloud Scheduler | Midnight UTC | prod | `cloudbuild-nightly.yaml` | `full` | No |
+| `canary-quality-check` | Manual or scheduled | prod | `canary-quality-check.yaml` | n/a (agentic rubric metrics) | No |
+| Cloud Scheduler | Midnight UTC | prod | `canary-quality-check.yaml` | n/a | No |
 
 ### Terraform triggers (run in parallel with app triggers)
 
@@ -168,7 +169,7 @@ Integration tests run automatically on any PR that touches agent logic. No manua
 | Push to `main` | `ci-cd-push-main` (dev deploy) + `terraform-apply` |
 | Tag `v*.*.*-rc.*` | `release-staging` (staging deploy + eval) |
 | Tag `v*.*.*` | `release` (prod shadow deploy + canary enable) |
-| Midnight UTC | Cloud Scheduler fires `ci-manual` (regression monitor) |
+| Midnight UTC | Cloud Scheduler fires `canary-quality-check` (real-traffic agentic eval; no-op if no canary is live) |
 
 ---
 
@@ -195,32 +196,24 @@ The `release` trigger runs:
 4. New Agent Engine deployed: display name `customer-support-multiagent-v1.2.0`, new resource ID
 5. Cloud Run shadow revision deployed: `--no-traffic --tag sha-SHORT_SHA --revision-suffix sha-SHORT_SHA`
 6. Smoke tests run against the shadow revision URL (no prod traffic affected)
-7. Post-deploy eval runs against the new Agent Engine via `eval_vertex.py`
+7. Post-deploy eval runs against the new Agent Engine via `eval_vertex.py`, checking both absolute thresholds and a relative regression against the baseline (the last release that passed this gate — the baseline only updates on pass, so it always reflects the last known-good release)
 8. If eval passes: traffic split set to `(100 - CANARY_PCT)%` champion / `CANARY_PCT%` canary (default 10%)
-9. If eval fails: build fails, shadow stays at 0% traffic
+9. If eval fails: build fails, shadow stays at 0% traffic, baseline untouched
 
-### Nightly decision gate
+### Canary quality check (real-traffic agentic eval)
 
-Nightly eval runs against the prod Agent Engine and compares scores against the stored GCS baseline:
+This is a separate, ongoing check on top of the fixed-dataset gate above. It runs on a schedule (or manually) while a canary is live, and answers a question the release gate structurally can't: *is the canary actually behaving correctly on real users' conversations, not just on a static set of pre-written prompts?*
 
-Regression is measured using a **composite weighted score**: Tool Use Quality (40%) + Final Response Quality (40%) + Hallucination (10%) + Safety (10%). A single-metric swing from LLM judge variance does not trigger a rollback — only a drop in the overall composite score exceeds the threshold.
+It pulls real sessions from **both** the canary and champion Agent Engines via the Sessions API (`--since` window, e.g. last 2h), scores each on agentic rubric metrics (task success, tool use quality, safety), and compares the canary's scores against the champion's on the *same real traffic* — not against a fixed baseline file.
 
-- **No regression detected**: baseline updated, nightly passes.
-- **Regression detected (composite score drop > `_REGRESSION_THRESHOLD`, default 10%)**: nightly exits 1, team alerted via Cloud Build failure notification.
+| Outcome | Condition | Action |
+|---------|-----------|--------|
+| Promote (exit 0) | Canary within `_CANARY_CHECK_RELATIVE_THRESHOLD` of champion AND above `_CANARY_CHECK_ABSOLUTE_FLOOR` | Promote canary to 100% |
+| Rollback (exit 1) | Canary regressed beyond either threshold | Roll back champion to 100%, fail build (alerts the team) |
+| Hold (exit 2) | Fewer than `_CANARY_CHECK_MIN_SESSIONS` real sessions on either engine since `_CANARY_CHECK_SINCE` | No-op — re-check on the next scheduled run |
+| No-op | No canary currently live (champion at 100%) | Nothing to do |
 
-Canary promotion and rollback happen **automatically**:
-
-| Outcome | Action |
-|---------|--------|
-| Eval passes, canary live, pass count < threshold | Increment pass counter in GCS, wait for next night |
-| Eval passes, canary live, pass count >= threshold | Promote canary to 100%, reset counter |
-| Eval passes, no canary | Update baseline, pass |
-| Regression detected, canary live | Roll back champion to 100%, reset counter, exit 1 |
-| Regression detected, no canary | Reset counter, exit 1 |
-
-The promotion threshold is `_CANARY_PROMOTE_THRESHOLD` (default: 1 consecutive passing night).
-
-Pass counter stored at: `$_STAGING_BUCKET/baselines/canary-pass-count.json`
+Implemented in `tests/eval_agent_platform.py`'s `canary-check` mode. See [EVALUATION.md](./EVALUATION.md) for the full rationale (why this replaced the old fixed-dataset nightly job, and why infra metrics like error rate/latency aren't the right signal for a multi-agent system).
 
 **Manual overrides** (emergency use):
 
@@ -234,7 +227,7 @@ gcloud run services update-traffic customer-support-app \
 gcloud run services update-traffic customer-support-app \
   --to-revisions=CHAMPION_REVISION=100 \
   --region=us-central1 --project=YOUR_PROD_PROJECT
-# No env var update needed — nightly reads the engine from the champion revision directly
+# No env var update needed — canary-quality-check reads the engine from the champion revision directly
 
 # Check current traffic split
 gcloud run services describe customer-support-app \
@@ -485,26 +478,27 @@ Gets the tagged revision URL from Cloud Run service describe. Written to `/works
 Runs smoke tests against the shadow URL. No prod users affected.
 
 ### 17. post-deploy-eval
-Runs `tests/eval_vertex.py --agent-engine-id NEW_ENGINE --custom-inference --output /workspace/eval_scores.json`. Exits 0 if thresholds pass, 1 if they fail (blocks enable-canary).
+Runs `tests/eval_vertex.py --agent-engine-id NEW_ENGINE --custom-inference --update-baseline GCS_PATH --regression-threshold 0.10 --output /workspace/eval_scores.json`. Checks absolute thresholds AND a relative regression against the baseline (the last release that passed this gate — only updates on pass). Exits 0 if both pass, 1 if either fails (blocks enable-canary).
 
 ### 18. enable-canary
 Runs only if post-deploy-eval passed. Splits Cloud Run traffic between champion and canary revisions using `_CANARY_TRAFFIC_PERCENT` (default 10%). On first deploy (no champion): promotes canary to 100%.
 
 ---
 
-## Nightly Pipeline (cloudbuild-nightly.yaml)
+## Canary Quality Check Pipeline (canary-quality-check.yaml)
 
-Resolves the Agent Engine from the active Cloud Run revision (canary if live, champion otherwise) and compares a composite weighted score against a GCS-stored baseline:
+Resolves the Agent Engine for **both** the champion and canary Cloud Run revisions (no-op if no canary is live), then runs `tests/eval_agent_platform.py canary-check` to compare them on real production sessions:
 
-- **First run**: saves current scores as baseline, passes.
-- **No regression**: updates baseline, passes.
-- **Regression detected (composite score drop > `_REGRESSION_THRESHOLD`, default 0.10)**: exits 1.
+- **No canary live**: no-op, exits 0.
+- **Not enough real sessions yet** (fewer than `_CANARY_CHECK_MIN_SESSIONS` since `_CANARY_CHECK_SINCE`): holds, exits 0 without acting — re-checked on the next run.
+- **Canary within threshold of champion**: promotes canary to 100%, exits 0.
+- **Canary regressed** (relative drop beyond `_CANARY_CHECK_RELATIVE_THRESHOLD` or below `_CANARY_CHECK_ABSOLUTE_FLOOR`): rolls back to champion, exits 1 (alerts the team via Cloud Build failure notification).
 
-The nightly baseline is stored at `$_STAGING_BUCKET/baselines/nightly-baseline.json`.
+Unlike the old nightly job, there is no persistent baseline file — each run compares the canary and champion against each other on the same real traffic window, so there's nothing to go stale.
 
 ```bash
 # Run manually
-gcloud builds triggers run ci-manual \
+gcloud builds triggers run canary-quality-check \
   --project=YOUR_PROJECT_ID --region=us-central1 --branch=main
 ```
 
@@ -583,16 +577,18 @@ All roles are granted by Terraform (`terraform/modules/core/iam.tf`). No service
 
 #### Cloud Console: quick reference
 
-| Field | ci-pull-request | ci-cd-push-main | release-staging | release | ci-manual |
+| Field | ci-pull-request | ci-cd-push-main | release-staging | release | canary-quality-check |
 |-------|----------------|-----------------|-----------------|---------|-----------|
-| **Name** | `ci-pull-request` | `ci-cd-push-main` | `release-staging` | `release` | `ci-manual` |
-| **Event** | Pull request | Push to branch | Push tag | Push tag | Manual |
+| **Name** | `ci-pull-request` | `ci-cd-push-main` | `release-staging` | `release` | `canary-quality-check` |
+| **Event** | Pull request | Push to branch | Push tag | Push tag | Manual / scheduled |
 | **Branch / Tag** | `^main$` | `^main$` | `^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+` | `^v[0-9]+\.[0-9]+\.[0-9]+$` | `main` |
-| **Build config** | `cloudbuild/pr-checks.yaml` | `cloudbuild/cloudbuild-deploy.yaml` | `cloudbuild/release-staging.yaml` | `cloudbuild/release.yaml` | `cloudbuild/cloudbuild-nightly.yaml` |
+| **Build config** | `cloudbuild/pr-checks.yaml` | `cloudbuild/cloudbuild-deploy.yaml` | `cloudbuild/release-staging.yaml` | `cloudbuild/release.yaml` | `cloudbuild/canary-quality-check.yaml` |
 | **_STAGING_BUCKET** | | `gs://YOUR_BUCKET` | `gs://YOUR_BUCKET` | `gs://YOUR_BUCKET` | `gs://YOUR_BUCKET` |
-| **_AGENT_ENGINE_RESOURCE_NAME** | | `projects/.../reasoningEngines/ID` | | `projects/.../reasoningEngines/ID` | `projects/.../reasoningEngines/ID` |
+| **_AGENT_ENGINE_RESOURCE_NAME** | | `projects/.../reasoningEngines/ID` | | `projects/.../reasoningEngines/ID` | |
 | **_CANARY_TRAFFIC_PERCENT** | | | | `10` | |
 | **_EVAL_DATASET** | | | `tests/post_deploy/datasets/post_deploy_cases.json` | `tests/post_deploy/datasets/post_deploy_cases.json` | |
+| **_CANARY_CHECK_SINCE** | | | | | `2h` |
+| **_CANARY_CHECK_MIN_SESSIONS** | | | | | `20` |
 
 #### Trigger: Push to `main` (dev, CI + CD)
 
@@ -635,12 +631,12 @@ substitutions:
 EOF
 ```
 
-#### Trigger: Nightly regression monitor (prod)
+#### Trigger: Canary quality check (prod)
 
 Created automatically by Terraform. Run manually:
 
 ```bash
-gcloud builds triggers run ci-manual --region=us-central1 --project=YOUR_PROJECT_ID --branch=main
+gcloud builds triggers run canary-quality-check --region=us-central1 --project=YOUR_PROJECT_ID --branch=main
 ```
 
 #### Fixing existing triggers with typos
@@ -658,15 +654,15 @@ filename: cloudbuild/cloudbuild-deploy.yaml
 EOF
 ```
 
-### Nightly Schedule
+### Canary Quality Check Schedule
 
 Cloud Scheduler (created automatically by Terraform for prod):
 
 ```bash
 TRIGGER_ID=$(gcloud builds triggers list \
-  --filter="name=ci-manual" --format="value(id)")
+  --filter="name=canary-quality-check" --format="value(id)")
 
-gcloud scheduler jobs create http nightly-full-eval \
+gcloud scheduler jobs create http canary-quality-check \
   --schedule="0 0 * * *" \
   --uri="https://cloudbuild.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/triggers/${TRIGGER_ID}:run" \
   --http-method=POST \
@@ -695,9 +691,12 @@ gcloud scheduler jobs create http nightly-full-eval \
 | `_MODEL_ARMOR_TEMPLATE_ID` | | Model Armor template ID |
 | `_RUN_LOAD_TESTS` | `false` | Run Locust load tests (staging rc tags only) |
 | `_CANARY_TRAFFIC_PERCENT` | `10` | % of prod traffic to send to canary after eval passes |
-| `_CANARY_PROMOTE_THRESHOLD` | `1` | Consecutive passing nights before canary is auto-promoted (nightly) |
-| `_REGRESSION_THRESHOLD` | `0.10` | Max allowed composite score drop vs baseline, e.g. 0.10 = 10% (nightly) |
+| `_REGRESSION_THRESHOLD` | `0.10` | Max allowed composite score drop vs the last known-good release baseline (release + release-staging gates) |
 | `_EVAL_DATASET` | `tests/post_deploy/datasets/post_deploy_cases.json` | Dataset for post-deploy eval (staging + prod release) |
+| `_CANARY_CHECK_SINCE` | `2h` | How far back to pull real sessions for the canary quality check |
+| `_CANARY_CHECK_MIN_SESSIONS` | `20` | Min real sessions per engine before the canary quality check will decide |
+| `_CANARY_CHECK_RELATIVE_THRESHOLD` | `0.10` | Max relative score drop of canary vs champion on real traffic before rollback |
+| `_CANARY_CHECK_ABSOLUTE_FLOOR` | `0.60` | Min absolute canary score regardless of the champion comparison |
 
 `$PROJECT_ID` and `$COMMIT_SHA` are built-in Cloud Build substitutions.
 
@@ -711,7 +710,7 @@ gcloud scheduler jobs create http nightly-full-eval \
 | `cloudbuild-deploy.yaml` | 60 min | CI + Docker + Agent Engine + Cloud Run + smoke |
 | `release-staging.yaml` | 90 min | Full CI + Docker + Agent Engine + load tests + eval |
 | `release.yaml` | 90 min | Full CI + Docker + new Agent Engine + shadow + eval + canary |
-| `cloudbuild-nightly.yaml` | 60 min | Full eval with LLM judges + baseline comparison + promote-or-rollback |
+| `canary-quality-check.yaml` | 60 min | Real-traffic agentic eval (Sessions API) + promote/rollback/hold |
 | `terraform-plan.yaml` | 20 min | Init + plan only |
 | `terraform-apply.yaml` | 30 min | Init + apply |
 
@@ -740,10 +739,9 @@ make submit-build                          # Cloud Run only
 make submit-build DEPLOY_AGENT_ENGINE=true # + Agent Engine redeploy
 make submit-build EVAL_PROFILE=fast        # faster feedback
 
-# Trigger the nightly pipeline against code on main
-git push origin main
+# Trigger the canary quality check against code on main
 make nightly
-make nightly RUN_POST_DEPLOY_EVAL=true
+make nightly MIN_SESSIONS=50 SINCE=1d
 
 # Show all targets
 make help

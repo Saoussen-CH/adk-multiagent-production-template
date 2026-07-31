@@ -22,7 +22,7 @@ from customer_support_mas.callbacks import (
 )
 
 # Import centralized configuration
-from customer_support_mas.config import get_agent_config
+from customer_support_mas.config import get_agent_config, get_generate_content_config, get_model_with_retry
 
 # =============================================================================
 # ORDER AGENT
@@ -31,7 +31,7 @@ from customer_support_mas.config import get_agent_config
 order_config = get_agent_config("order_agent")
 order_agent = Agent(
     name=order_config["name"],
-    model=order_config["model"],
+    model=get_model_with_retry("order_agent"),
     description=order_config["description"],
     instruction="""You help customers track orders and view order history.
 
@@ -75,6 +75,7 @@ Be helpful and proactive - if you see delays, mention them.""",
     ],
     before_model_callback=log_system_instructions,  # DEBUG: Log system instruction with preloaded memories
     after_agent_callback=auto_save_to_memory,  # IMPLICIT (invocation context) ✅ Active
+    generate_content_config=get_generate_content_config(),
 )
 
 root_agent = order_agent

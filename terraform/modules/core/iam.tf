@@ -26,7 +26,7 @@ resource "google_project_iam_member" "agent_engine_sa" {
 # ------------------------------------------------------------------------------
 resource "google_project_iam_member" "vertex_sa" {
   for_each = var.google_managed_sas_exist ? toset([
-    "roles/datastore.user",  # Firestore vector search for RAG
+    "roles/datastore.user", # Firestore vector search for RAG
     "roles/aiplatform.user",
   ]) : toset([])
 
@@ -38,14 +38,64 @@ resource "google_project_iam_member" "vertex_sa" {
 }
 
 # ------------------------------------------------------------------------------
+# Agent Identity (identity_type=AGENT_IDENTITY in deployment/deploy.py)
+#
+# Agent Identity replaces the classic service accounts above with a per-agent
+# SPIFFE principal — the agent_engine_sa/vertex_sa grants above do NOT apply
+# to it. Only two roles come for free (aiplatform.agentContextEditor,
+# aiplatform.agentDefaultAccess, covering inference/sessions/memory);
+# Firestore and Cloud Logging access must be granted explicitly per
+# "Use Agent Identity with Agent Runtime" — verified live: without this,
+# every tool call fails with 401 Unauthenticated (not 403), since the SPIFFE
+# principal has no grants at all, not just insufficient ones.
+#
+# Uses principalSet:// (all agents in this project), not a per-resource
+# principal://, so it doesn't need the Agent Engine ID as a Terraform input —
+# avoids a create-then-grant chicken-and-egg to match identity_type being
+# create-only/immutable on the engine itself.
+#
+# Trust domain is project-scoped (agents.global.proj-PROJECT_NUMBER...)
+# because this project has no parent organization; projects under an org
+# would use agents.global.org-ORGANIZATION_ID.system.id.goog instead.
+#
+# NOTE: the reference docs say "agents.global.project-PROJECT_NUMBER..." —
+# that's wrong. Verified against a real deployed engine's own reported
+# spec.effective_identity: the actual trust domain is "proj-", not
+# "project-" (e.g. agents.global.proj-1038615239861.system.id.goog). Using
+# the docs' literal string gets rejected by the IAM API with "member ... is
+# of an unknown type" — confirmed live, not a Terraform quirk.
+#
+# IMPORTANT: these grants alone are NOT sufficient. Agent Identity tokens
+# are cryptographically bound to the agent's own X.509 cert via
+# Context-Aware Access (mTLS/DPoP) — plain google-cloud-firestore/logging
+# clients (what this repo's tools use) never establish that mTLS channel,
+# so calls still 401 even with fully correct IAM. deployment/deploy.py's
+# ENV_VARS also sets GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES
+# to opt out of that binding — both pieces are required together, verified
+# live against real seeded Firestore data.
+# ------------------------------------------------------------------------------
+resource "google_project_iam_member" "agent_identity" {
+  for_each = var.google_managed_sas_exist ? toset([
+    "roles/datastore.user",    # Firestore (tool calls) — not in the default identity role set
+    "roles/logging.logWriter", # Cloud Logging (LoggingPlugin, OTel exporter) — same
+  ]) : toset([])
+
+  project = var.project_id
+  role    = each.key
+  member  = "principalSet://agents.global.proj-${local.project_number}.system.id.goog/attribute.platformContainer/aiplatform/projects/${local.project_number}"
+
+  depends_on = [google_project_service.apis]
+}
+
+# ------------------------------------------------------------------------------
 # Cloud Run default compute service account
 # Runs the FastAPI backend; needs Agent Engine and Firestore.
 # ------------------------------------------------------------------------------
 resource "google_project_iam_member" "cloud_run_sa" {
   for_each = toset([
     # Cloud Run (FastAPI backend) roles
-    "roles/aiplatform.user",              # Call Agent Engine
-    "roles/datastore.user",               # Read/write sessions and messages
+    "roles/aiplatform.user", # Call Agent Engine
+    "roles/datastore.user",  # Read/write sessions and messages
     # CI/CD roles — compute SA is also used as the 2nd gen Cloud Build trigger SA
     # (Google-managed @cloudbuild SA is rejected by 2nd gen builds)
     "roles/aiplatform.admin",             # Deploy to Agent Engine
@@ -72,13 +122,13 @@ resource "google_project_iam_member" "cloud_run_sa" {
 # ------------------------------------------------------------------------------
 resource "google_project_iam_member" "cloud_build_sa" {
   for_each = toset([
-    "roles/datastore.user",                 # Firestore access during agent eval tests
-    "roles/aiplatform.user",                # Call Vertex AI Gemini during eval tests
-    "roles/aiplatform.admin",               # Deploy to Agent Engine
-    "roles/artifactregistry.writer",        # Push Docker images
-    "roles/run.admin",                      # Deploy Cloud Run service
-    "roles/storage.objectAdmin",            # Read/write staging bucket
-    "roles/secretmanager.secretAccessor",   # Read staging-bucket secret
+    "roles/datastore.user",               # Firestore access during agent eval tests
+    "roles/aiplatform.user",              # Call Vertex AI Gemini during eval tests
+    "roles/aiplatform.admin",             # Deploy to Agent Engine
+    "roles/artifactregistry.writer",      # Push Docker images
+    "roles/run.admin",                    # Deploy Cloud Run service
+    "roles/storage.objectAdmin",          # Read/write staging bucket
+    "roles/secretmanager.secretAccessor", # Read staging-bucket secret
   ])
 
   project = var.project_id

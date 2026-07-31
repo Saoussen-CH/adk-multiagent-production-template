@@ -23,7 +23,7 @@ from pathlib import Path
 import vertexai
 from dotenv import load_dotenv
 from google.adk.plugins.logging_plugin import LoggingPlugin
-from vertexai import Client, agent_engines
+from vertexai import Client, agent_engines, types
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
@@ -51,7 +51,14 @@ if not STAGING_BUCKET:
 DISPLAY_NAME = os.getenv("AGENT_ENGINE_DISPLAY_NAME", "customer-support-multiagent")
 
 REQUIREMENTS = [
-    "google-cloud-aiplatform[adk,agent_engines]>=1.112",
+    "google-cloud-aiplatform[adk,agent_engines]>=1.160.0",
+    # Pinned explicitly (not left to the [adk] extra's own floor) so the
+    # remote build resolves the SAME ADK version used locally to construct
+    # and pickle root_agent. A mismatch here is why an earlier deploy on
+    # this branch failed at runtime with "'LlmAgent' object has no
+    # attribute 'mode'" — the extra alone let the remote build pick an
+    # older, incompatible ADK version.
+    "google-adk>=2.4.0",
     "google-cloud-firestore>=2.16.0",
     "google-cloud-modelarmor>=0.1.0",
     "requests",
@@ -62,7 +69,33 @@ REQUIREMENTS = [
 ENV_VARS = {
     "FIRESTORE_DATABASE": os.getenv("FIRESTORE_DATABASE", "customer-support-db"),
     "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
-    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
+    # Required together for full prompt/response capture in traces — see
+    # refs/scale/Manage deployed agents/Set up tracing.md. "true" is not a
+    # valid value for the capture-content var; EVENT_ONLY is.
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+    # REQUIRED for identity_type=AGENT_IDENTITY to work with this repo's
+    # tools, and CONFIRMED live (not just a hypothesis): without this, every
+    # Firestore/Cloud Logging call from a deployed AGENT_IDENTITY engine
+    # failed with 401 Unauthenticated — reproduced even with fully correct
+    # IAM grants (roles/datastore.user, roles/logging.logWriter on the right
+    # principalSet, verified present in the live policy) and 10+ minutes
+    # past any plausible propagation delay. Root cause: per refs/Govern/
+    # Agent Identity overview.md, agent-identity tokens are cryptographically
+    # bound to the agent's own X.509 cert via Context-Aware Access (CAA)
+    # mTLS/DPoP — this repo's tools use plain google-cloud-firestore/logging
+    # clients, which never establish that mTLS channel, so the bound token
+    # is rejected regardless of IAM. Setting this env var opts the engine
+    # out of that binding. Adding it and redeploying immediately fixed it —
+    # verified against real seeded data (ORD-12345 tracking + INV-2025-001
+    # invoice returned correctly for demo-user-001).
+    #
+    # Tradeoff: Google's own docs "strongly discourage" this — it makes
+    # tokens replayable outside the runtime, which is the exact protection
+    # Agent Identity exists to provide. Kept here as a deliberate choice for
+    # this project; reconsider if tool code is ever updated to make mTLS-
+    # bound calls natively instead of opting out of the requirement.
+    "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "False",
 }
 
 # Propagate Model Armor settings to Agent Engine runtime if enabled
@@ -131,14 +164,13 @@ def init_vertex_ai():
     print(f"  Staging:  {STAGING_BUCKET}")
 
 
-def find_existing_agent_engine():
+def find_existing_agent_engine(client: Client):
     """Find existing Agent Engine by display name. Returns the engine or None."""
     try:
         print(f"  Checking for existing Agent Engine '{DISPLAY_NAME}'...")
-        for engine in agent_engines.list():
-            if engine.display_name == DISPLAY_NAME:
-                print(f"  ✓ Found existing: {engine.resource_name}")
-                return engine
+        for engine in client.agent_engines.list(config={"filter": f'display_name="{DISPLAY_NAME}"'}):
+            print(f"  ✓ Found existing: {engine.api_resource.name}")
+            return engine
         print("  No existing Agent Engine found — will create new")
     except Exception as e:
         print(f"  ⚠️  Could not list Agent Engines: {e}")
@@ -180,7 +212,6 @@ async def test_locally():
     app = agent_engines.AdkApp(
         agent=root_agent,
         app_name="customer_support",
-        enable_tracing=True,
         plugins=build_plugins(),
     )
 
@@ -250,35 +281,58 @@ def deploy_to_agent_engine():
     adk_app = agent_engines.AdkApp(
         agent=root_agent,
         app_name="customer_support",
-        enable_tracing=True,
         plugins=build_plugins(),
     )
 
     # -------------------------------------------------------------------------
     # Stage 1: Update existing or create new
     # -------------------------------------------------------------------------
-    existing = find_existing_agent_engine()
+    existing = find_existing_agent_engine(client)
 
     if existing:
         print("\n⏳ Stage 1/2: Updating existing Agent Engine...")
-        existing.update(
-            agent_engine=adk_app,
-            requirements=REQUIREMENTS,
-            extra_packages=["customer_support_mas"],
-            env_vars=ENV_VARS,
+        updated = client.agent_engines.update(
+            name=existing.api_resource.name,
+            agent=adk_app,
+            config={
+                "staging_bucket": STAGING_BUCKET,
+                "requirements": REQUIREMENTS,
+                "extra_packages": ["customer_support_mas"],
+                "env_vars": ENV_VARS,
+            },
         )
-        resource_name = existing.resource_name
+        resource_name = updated.api_resource.name
         print("✓ Agent Engine updated (resource name unchanged)")
     else:
         print("\n⏳ Stage 1/2: Creating new Agent Engine...")
-        remote_app = agent_engines.create(
-            agent_engine=adk_app,
-            requirements=REQUIREMENTS,
-            extra_packages=["customer_support_mas"],
-            display_name=DISPLAY_NAME,
-            env_vars=ENV_VARS,
+        remote_app = client.agent_engines.create(
+            agent=adk_app,
+            config={
+                "staging_bucket": STAGING_BUCKET,
+                "requirements": REQUIREMENTS,
+                "extra_packages": ["customer_support_mas"],
+                "display_name": DISPLAY_NAME,
+                "env_vars": ENV_VARS,
+                # Set only at creation — immutable on existing engines. Gives the
+                # agent a per-agent SPIFFE identity instead of a shared service
+                # account (see refs/scale/Use Agent Identity with Agent Runtime.md)
+                # and unlocks Agent Gateway / Semantic Governance Policies later.
+                #
+                # Firestore + Cloud Logging access are NOT in Agent Identity's
+                # default role set (only aiplatform.agentContextEditor/
+                # agentDefaultAccess come for free) — verified live that without
+                # the corresponding grants, every tool call fails with 401
+                # Unauthenticated. terraform/modules/core/iam.tf's
+                # google_project_iam_member.agent_identity grants roles/
+                # datastore.user + roles/logging.logWriter to the project-wide
+                # principalSet (agents.global.project-PROJECT_NUMBER... — this
+                # project has no parent org, so the trust domain is project-
+                # scoped, not org-scoped). That must be applied before this
+                # engine's first real tool call, not just before it's created.
+                "identity_type": types.IdentityType.AGENT_IDENTITY,
+            },
         )
-        resource_name = remote_app.resource_name
+        resource_name = remote_app.api_resource.name
         print("✓ Agent Engine created!")
 
     agent_engine_id = resource_name.split("/")[-1]
@@ -321,8 +375,10 @@ async def test_remote_agent(resource_name: str):
     print("=" * 60)
 
     init_vertex_ai()
+    numeric_project_id = get_numeric_project_id(PROJECT_ID)
+    client = Client(project=numeric_project_id, location=LOCATION)
 
-    remote_app = agent_engines.get(resource_name)
+    remote_app = client.agent_engines.get(name=resource_name)
     print(f"✓ Connected to: {resource_name}")
 
     session = await remote_app.async_create_session(user_id="remote_test_user")
@@ -358,8 +414,10 @@ def cleanup_deployment(resource_name: str):
     print("=" * 60)
 
     init_vertex_ai()
+    numeric_project_id = get_numeric_project_id(PROJECT_ID)
+    client = Client(project=numeric_project_id, location=LOCATION)
 
-    remote_app = agent_engines.get(resource_name)
+    remote_app = client.agent_engines.get(name=resource_name)
     remote_app.delete(force=True)
 
     print(f"✓ Deleted: {resource_name}")

@@ -40,26 +40,30 @@ flowchart TD
         R3[NEW Agent Engine\ndisplay name: v*\ncleanup old engines: keep 2]
         R4[shadow Cloud Run deploy\n--no-traffic --tag sha-SHORT_SHA]
         R5[smoke test\ntagged revision URL]
-        R6[post-deploy eval gate\nVertex AI Eval Service]
+        R6[post-deploy eval gate\nVertex AI Eval Service\nvs last known-good release baseline]
         R7{eval passed?}
         R8[enable canary\nCANARY=10% CHAMPION=90%]
         R1 --> R2 --> R3 --> R4 --> R5 --> R6 --> R7
         R7 -->|yes| R8
-        R7 -->|no| R_FAIL[❌ block release\nshadow stays at 0%]
+        R7 -->|no| R_FAIL[❌ block release\nshadow stays at 0%\nbaseline untouched]
     end
 
-    NIGHTLY[⏰ Midnight UTC\nCloud Scheduler]
+    CANARY_SCHED[⏰ Midnight UTC\nCloud Scheduler]
 
-    subgraph nightly_pipe ["ci-manual nightly — prod"]
+    subgraph canary_pipe ["canary-quality-check — prod (no-op if no canary live)"]
         direction TB
-        N1[resolve engine from Cloud Run revision\neval via Vertex AI Eval Service\nEVAL_PROFILE=full]
-        N2[compare composite score vs GCS baseline\ntool_use×0.4 + response×0.4 + halluc×0.1 + safety×0.1\nthreshold: 10% relative drop]
-        N3{regression?}
-        N4[increment pass counter\npromote canary if N passes]
-        N5[rollback champion\nreset counter\nfail build — alert team]
+        N1[resolve champion + canary engines\nfrom Cloud Run traffic split]
+        N2[pull REAL sessions per engine\nAgent Engine Sessions API\nscore: task success, tool use quality, safety]
+        N3{enough real\nsessions?}
+        N4{canary vs champion\non real traffic}
+        N5[promote canary to 100%]
+        N6[rollback to champion\nfail build — alert team]
+        N7[hold — re-check next run]
         N1 --> N2 --> N3
-        N3 -->|no| N4
-        N3 -->|yes| N5
+        N3 -->|no| N7
+        N3 -->|yes| N4
+        N4 -->|within threshold| N5
+        N4 -->|regressed| N6
     end
 
     PR --> pr_checks
@@ -70,17 +74,18 @@ flowchart TD
     staging_pipe --> PROD_TAG
     PROD_TAG --> release_pipe
 
-    NIGHTLY --> nightly_pipe
+    R8 -.canary live.-> CANARY_SCHED
+    CANARY_SCHED --> canary_pipe
 
     style PR fill:#4285F4,stroke:#1967D2,color:#fff
     style MERGE fill:#34A853,stroke:#0D652D,color:#fff
     style RC_TAG fill:#9334E6,stroke:#7627BB,color:#fff
     style PROD_TAG fill:#9334E6,stroke:#7627BB,color:#fff
-    style NIGHTLY fill:#FF6F00,stroke:#E65100,color:#fff
+    style CANARY_SCHED fill:#FF6F00,stroke:#E65100,color:#fff
     style R_FAIL fill:#EA4335,stroke:#C62828,color:#fff
-    style N5 fill:#EA4335,stroke:#C62828,color:#fff
+    style N6 fill:#EA4335,stroke:#C62828,color:#fff
     style pr_checks fill:#E8F5E9,stroke:#34A853
     style dev_push fill:#E3F2FD,stroke:#4285F4
     style staging_pipe fill:#F3E5F5,stroke:#9334E6
     style release_pipe fill:#F3E5F5,stroke:#9334E6
-    style nightly_pipe fill:#FFF3E0,stroke:#FF6F00
+    style canary_pipe fill:#FFF3E0,stroke:#FF6F00

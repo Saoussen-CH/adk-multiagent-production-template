@@ -37,6 +37,7 @@ substitutions:
   _MODEL_ARMOR_ENABLED: "false"
   _MODEL_ARMOR_TEMPLATE_ID: ""
   _EVAL_DATASET: "tests/post_deploy/datasets/post_deploy_cases.json"
+  _REGRESSION_THRESHOLD: "0.10"     # max allowed relative score drop vs the last staging release that passed this gate
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -261,6 +262,11 @@ steps:
   # ===========================================================================
   # Post-deploy eval against staging Agent Engine
   # Pass: cut the prod tag. Fail: fix before tagging prod.
+  #
+  # Checks absolute thresholds AND a relative comparison against the last
+  # staging release that passed this gate (baseline only updates on pass —
+  # see tests/eval_vertex.py's --update-baseline handling). Kept on its own
+  # baseline path, separate from prod's, since they're different deployments.
   # ===========================================================================
   - id: "post-deploy-eval"
     name: "python:${_PYTHON_VERSION}-slim"
@@ -278,6 +284,8 @@ steps:
           --dataset "${_EVAL_DATASET}" \
           --custom-inference \
           --output /workspace/eval_scores.json \
+          --update-baseline "${_STAGING_BUCKET}/baselines/staging-release-baseline.json" \
+          --regression-threshold ${_REGRESSION_THRESHOLD} \
           --delay 5
     env:
       - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"

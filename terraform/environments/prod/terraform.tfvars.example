@@ -22,5 +22,16 @@ github_owner        = "YOUR_GITHUB_USERNAME"
 # cloud_run_service_name = "customer-support-app"
 # model_armor_enabled   = true
 # model_armor_floor_mode = "INSPECT_AND_BLOCK"  # prod: block harmful content
-# canary_traffic_percent         = 10   # % traffic to new revision on canary enable
-# nightly_regression_threshold   = 0.05 # max score drop before nightly eval fails
+# canary_traffic_percent           = 10    # % traffic to new revision on canary enable
+# canary_check_since               = "2h"  # how far back to pull real sessions for the canary quality check
+# canary_check_min_sessions        = 20    # min real sessions per engine before deciding
+# canary_check_relative_threshold  = 0.10  # max relative score drop of canary vs champion before rollback
+# canary_check_absolute_floor      = 0.60  # min absolute canary score regardless of champion comparison
+
+# Ambient quality drift alerting — requires an Online Monitor created manually
+# via console first (Agent Platform > Evaluation > Online monitors), pointed
+# at the champion Agent Engine. See docs/EVALUATION.md's Ambient Drift
+# Monitoring section. Leave enable_quality_alerts=false until that's done.
+# enable_quality_alerts               = true
+# quality_alert_task_success_threshold = 0.60
+# quality_alert_notification_channels  = ["projects/YOUR_PROJECT_ID/notificationChannels/YOUR_CHANNEL_ID"]

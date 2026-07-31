@@ -14,33 +14,36 @@ from customer_support_mas.agents.refund.tools import (
 )
 
 # Import centralized configuration
-from customer_support_mas.config import get_agent_config
+from customer_support_mas.config import get_agent_config, get_generate_content_config, get_model_with_retry
 
 validator_config = get_agent_config("order_validator")
 validation_agent = Agent(
     name=validator_config["name"],
-    model=validator_config["model"],
+    model=get_model_with_retry("order_validator"),
     description="Validates refund request: ownership, delivery status, and items in order",
     instruction=validator_config["instruction"],
     tools=[validate_refund_request],
+    generate_content_config=get_generate_content_config(),
 )
 
 eligibility_config = get_agent_config("eligibility_checker")
 eligibility_agent = Agent(
     name=eligibility_config["name"],
-    model=eligibility_config["model"],
+    model=get_model_with_retry("eligibility_checker"),
     description="Checks if the order is eligible for a refund based on business rules",
     instruction=eligibility_config["instruction"],
     tools=[check_refund_eligibility],
+    generate_content_config=get_generate_content_config(),
 )
 
 refund_config = get_agent_config("refund_processor")
 refund_processor = Agent(
     name=refund_config["name"],
-    model=refund_config["model"],
+    model=get_model_with_retry("refund_processor"),
     description="Processes the refund after validation and eligibility checks pass",
     instruction=refund_config["instruction"],
     tools=[process_refund],
+    generate_content_config=get_generate_content_config(),
 )
 
 sequential_refund_workflow = SequentialAgent(

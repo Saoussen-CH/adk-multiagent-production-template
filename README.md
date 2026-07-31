@@ -47,7 +47,7 @@ For full details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 | Session Management | Vertex AI Agent Engine sessions | Backend proxy with JWT auth + multi-user support |
 | Memory Bank | Vertex AI Memory Bank with callbacks | Cross-session preference recall |
 | Observability | LoggingPlugin + Cloud Logging | Production-ready monitoring |
-| Evaluation & Testing | Vertex AI Gen AI Evaluation + AgentEvaluator | 5-stage eval: local → CI → staging → prod → nightly, with eval-gated canary |
+| Evaluation & Testing | Vertex AI Gen AI Evaluation + AgentEvaluator | 5-stage eval: local → CI → staging → prod → real-traffic canary check, with eval-gated canary |
 | RAG Semantic Search | text-embedding-004 (768-dim) | Vector search on products |
 | CI/CD | Cloud Build | Full pipeline with eval gating across dev/staging/prod |
 | Post-Deploy Eval | Vertex AI Gen AI Evaluation Service | Live agent scoring after deploy |
@@ -110,7 +110,7 @@ All three support switchable eval profiles via `EVAL_PROFILE`:
 |---------|---------|------|
 | `fast` | Rouge-1 only | PRs (free, no LLM judge) |
 | `standard` | + tool name F1 / rubric LLM judge | Push to main (default) |
-| `full` | + final response match v2 | Nightly |
+| `full` | + final response match v2 | Deeper post-deploy checks |
 
 Plus post-deploy evaluation against the live Agent Engine using Vertex AI Gen AI Evaluation Service (`make eval-post-deploy ENV=staging`).
 
@@ -131,7 +131,7 @@ Single `main` branch. Environment promotion via git tags:
 | Push to `main` | CI + deploy to dev |
 | Tag `v*.*.*-rc.*` | Staging deploy + load tests + eval |
 | Tag `v*.*.*` | Prod shadow deploy + eval gate + canary |
-| Nightly (Cloud Scheduler) | Regression monitoring + auto canary promote/rollback |
+| Daily (Cloud Scheduler) | Canary quality check: real-traffic agentic eval vs champion, auto promote/rollback |
 
 See [docs/CI_CD.md](./docs/CI_CD.md) for full pipeline details.
 

@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # Import database client
 from customer_support_mas.database import db_client  # noqa: E402
 
+# Import error handling
+from customer_support_mas.error_handling import tool_error_handler  # noqa: E402
+
 # Import validation utilities
 from customer_support_mas.validation import (  # noqa: E402
     validate_product_id,
@@ -31,6 +34,7 @@ except Exception as e:
     USE_RAG = False
 
 
+@tool_error_handler
 def search_products(query: str, tool_context: ToolContext) -> dict:
     """Search for products using RAG (semantic) or keyword fallback.
 
@@ -112,6 +116,7 @@ def search_products(query: str, tool_context: ToolContext) -> dict:
     return {"status": "no_results", "message": f"No products found matching '{query}'"}
 
 
+@tool_error_handler
 def get_product_details(product_id: str) -> dict:
     """Get detailed information about a specific product by its ID.
 
@@ -132,6 +137,7 @@ def get_product_details(product_id: str) -> dict:
     return {"status": "not_found", "message": f"Product {product_id} not found"}
 
 
+@tool_error_handler
 def get_last_mentioned_product(tool_context: ToolContext) -> dict:
     """IMPORTANT: Use this tool when customer asks for details about a product you just showed them.
 
@@ -167,6 +173,7 @@ def get_last_mentioned_product(tool_context: ToolContext) -> dict:
     return {"status": "not_found", "message": f"Product {last_product_id} not found"}
 
 
+@tool_error_handler
 def check_inventory(product_id: str) -> dict:
     """Check inventory levels.
 
@@ -184,6 +191,7 @@ def check_inventory(product_id: str) -> dict:
     return {"status": "not_found"}
 
 
+@tool_error_handler
 def get_product_reviews(product_id: str) -> dict:
     """Get customer reviews for a product.
 
@@ -201,6 +209,7 @@ def get_product_reviews(product_id: str) -> dict:
     return {"status": "not_found"}
 
 
+@tool_error_handler
 def get_all_saved_products_info(tool_context: ToolContext) -> dict:
     """
     Get comprehensive information for ALL products from the last search.
@@ -245,6 +254,7 @@ def get_all_saved_products_info(tool_context: ToolContext) -> dict:
     return results
 
 
+@tool_error_handler
 def get_product_info(
     product_id: str, include_details: bool = True, include_inventory: bool = True, include_reviews: bool = True
 ) -> dict:

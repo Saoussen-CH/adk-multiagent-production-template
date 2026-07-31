@@ -4,7 +4,7 @@
 # start auto-detects whether customer_support_mas/** files changed and writes
 # the result to /workspace/deploy_agent_engine.txt.  The deploy-agent-engine
 # step respects both that file AND the explicit _DEPLOY_AGENT_ENGINE=true
-# substitution (set by manual / forced deploys via ci-manual trigger).
+# substitution (set by manual / forced deploys, e.g. `make submit-build DEPLOY_AGENT_ENGINE=true`).
 #
 # Ordering:
 #   detect-agent-changes

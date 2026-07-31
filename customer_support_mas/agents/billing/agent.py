@@ -27,7 +27,7 @@ from customer_support_mas.callbacks import (
 )
 
 # Import centralized configuration
-from customer_support_mas.config import get_agent_config
+from customer_support_mas.config import get_agent_config, get_generate_content_config, get_model_with_retry
 
 # =============================================================================
 # BILLING AGENT
@@ -36,7 +36,7 @@ from customer_support_mas.config import get_agent_config
 billing_config = get_agent_config("billing_agent")
 billing_agent = Agent(
     name=billing_config["name"],
-    model=billing_config["model"],
+    model=get_model_with_retry("billing_agent"),
     description=billing_config["description"],
     instruction="""You handle billing inquiries, invoices, and payment status.
 
@@ -89,6 +89,7 @@ Be clear about payment amounts and due dates.""",
     ],
     before_model_callback=log_system_instructions,  # DEBUG: Log system instruction with preloaded memories
     after_agent_callback=auto_save_to_memory,  # IMPLICIT (invocation context) ✅ Active
+    generate_content_config=get_generate_content_config(),
 )
 
 root_agent = billing_agent

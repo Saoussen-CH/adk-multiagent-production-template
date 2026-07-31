@@ -107,8 +107,44 @@ variable "canary_traffic_percent" {
   default     = 10
 }
 
-variable "nightly_regression_threshold" {
-  description = "Max allowed score drop vs GCS baseline before nightly eval fails (0.0–1.0)."
+variable "canary_check_since" {
+  description = "How far back to pull real production sessions for the canary quality check (e.g. \"2h\", \"1d\")."
+  type        = string
+  default     = "2h"
+}
+
+variable "canary_check_min_sessions" {
+  description = "Minimum real sessions required per engine before the canary quality check will render a promote/rollback decision (otherwise it holds)."
   type        = number
-  default     = 0.05
+  default     = 20
+}
+
+variable "canary_check_relative_threshold" {
+  description = "Max allowed relative score drop of canary vs champion on real traffic before rollback (0.0-1.0)."
+  type        = number
+  default     = 0.10
+}
+
+variable "canary_check_absolute_floor" {
+  description = "Minimum absolute canary score (0.0-1.0) required regardless of the champion comparison."
+  type        = number
+  default     = 0.60
+}
+
+variable "enable_quality_alerts" {
+  description = "Enable the Cloud Monitoring alert policy for Online Monitor quality drift scores. Does nothing until an Online Monitor is also created manually via console (no creation API exists) and pointed at the champion Agent Engine — see docs/EVALUATION.md."
+  type        = bool
+  default     = false
+}
+
+variable "quality_alert_task_success_threshold" {
+  description = "Alert if the Online Monitor's task_success score averages below this for 30+ minutes."
+  type        = number
+  default     = 0.60
+}
+
+variable "quality_alert_notification_channels" {
+  description = "Cloud Monitoring notification channel resource names (e.g. projects/PROJECT/notificationChannels/ID) to notify on quality drift alerts."
+  type        = list(string)
+  default     = []
 }

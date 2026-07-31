@@ -24,7 +24,7 @@ from customer_support_mas.agents.refund.tools import check_if_refundable
 from customer_support_mas.callbacks import auto_save_to_memory
 
 # Import centralized configuration
-from customer_support_mas.config import get_agent_config
+from customer_support_mas.config import get_agent_config, get_generate_content_config, get_model_with_retry
 
 # =============================================================================
 # ROOT AGENT (Coordinator)
@@ -33,7 +33,7 @@ from customer_support_mas.config import get_agent_config
 root_config = get_agent_config("root_agent")
 root_agent = Agent(
     name=root_config["name"],
-    model=root_config["model"],
+    model=get_model_with_retry("root_agent"),
     description=root_config["description"],
     instruction="""You are a customer support coordinator. Route queries to the right specialist agent.
 
@@ -102,4 +102,5 @@ EXAMPLES:
         AgentTool(sequential_refund_workflow),  # Refund workflow (after eligibility + reason confirmed)
     ],
     after_agent_callback=auto_save_to_memory,
+    generate_content_config=get_generate_content_config(),
 )

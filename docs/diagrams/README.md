@@ -7,9 +7,9 @@ Mermaid diagrams for the Multi-Agent Customer Support System.
 ### CI/CD Pipeline
 **File:** `cicd-pipeline.mmd`
 - Single `main` branch promotion flow: feat/* → PR → main → rc tag → prod tag
-- All Cloud Build triggers: PR checks (auto-detects agent changes: fast eval or standard + integration tests), push to main (dev deploy), rc tag (staging), prod tag (prod release), nightly
-- Release pipeline: shadow deploy → post-deploy eval gate → canary enable
-- Nightly regression: Cloud Scheduler → full Vertex AI eval → compare vs GCS baseline
+- All Cloud Build triggers: PR checks (auto-detects agent changes: fast eval or standard + integration tests), push to main (dev deploy), rc tag (staging), prod tag (prod release), canary quality check
+- Release pipeline: shadow deploy → post-deploy eval gate (vs last known-good release baseline) → canary enable
+- Canary quality check: Cloud Scheduler → real production sessions (Sessions API) scored on agentic behavior → canary vs champion → promote/rollback/hold
 
 ### System Overview
 **File:** `system-overview.mmd`

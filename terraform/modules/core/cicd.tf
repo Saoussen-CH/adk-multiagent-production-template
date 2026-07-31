@@ -1,5 +1,5 @@
 # ==============================================================================
-# CI/CD — Cloud Build triggers (2nd gen) + Cloud Scheduler nightly job
+# CI/CD — Cloud Build triggers (2nd gen) + Cloud Scheduler canary quality check
 # ==============================================================================
 #
 # Single main branch strategy. All triggers target ^main$. Environment
@@ -20,9 +20,11 @@
 #     release-staging   — Tag v*.*.*-rc.*: full CI + staging deploy + load tests + eval
 #
 #   prod only:
-#     release           — Tag v*.*.*: shadow deploy + eval gate + canary enable
-#     ci-manual         — Manual / nightly: regression monitoring vs GCS baseline
-#     Cloud Scheduler   — Fires ci-manual at midnight UTC
+#     release              — Tag v*.*.*: shadow deploy + eval gate + canary enable
+#     canary-quality-check — Manual / scheduled: real-traffic agentic eval of a
+#                            live canary vs champion; promotes, rolls back, or
+#                            holds. No-op if no canary is live.
+#     Cloud Scheduler      — Fires canary-quality-check at midnight UTC
 
 locals {
   repo_resource = "projects/${var.project_id}/locations/${var.region}/connections/${var.cloudbuild_connection_name}/repositories/${var.cloudbuild_repo_name}"
@@ -153,7 +155,7 @@ resource "google_cloudbuild_trigger" "push_main_dev" {
   filename = "cloudbuild/cloudbuild-deploy.yaml"
 
   substitutions = merge(local.app_substitutions, {
-    _RUN_LOAD_TESTS = "false"   # load tests run on staging rc tags only
+    _RUN_LOAD_TESTS = "false" # load tests run on staging rc tags only
   })
 
   depends_on = [google_project_service.apis]
@@ -188,7 +190,7 @@ resource "google_cloudbuild_trigger" "release_staging" {
 }
 
 # ==============================================================================
-# PROD TRIGGERS — release tag, nightly
+# PROD TRIGGERS — release tag, canary quality check
 # ==============================================================================
 
 # Release — prod tag v*.*.* (no rc suffix): shadow deploy + eval gate + canary
@@ -211,20 +213,23 @@ resource "google_cloudbuild_trigger" "release" {
   filename = "cloudbuild/release.yaml"
 
   substitutions = merge(local.app_substitutions, {
-    _EVAL_PROFILE             = "standard"
-    _CANARY_TRAFFIC_PERCENT   = tostring(var.canary_traffic_percent)
+    _EVAL_PROFILE           = "standard"
+    _CANARY_TRAFFIC_PERCENT = tostring(var.canary_traffic_percent)
   })
 
   depends_on = [google_project_service.apis]
 }
 
-# Nightly — manual dispatch + Cloud Scheduler: regression monitoring vs GCS baseline
+# Canary quality check — manual dispatch + Cloud Scheduler: compares a live
+# canary against its champion on REAL production traffic (via the Agent
+# Engine Sessions API), scored on agentic behavior. No-op if no canary is
+# live. See tests/eval_agent_platform.py's `canary-check` mode.
 resource "google_cloudbuild_trigger" "nightly" {
   count           = var.github_connected && local.is_prod ? 1 : 0
   project         = var.project_id
   location        = var.region
-  name            = "ci-manual"
-  description     = "Nightly regression monitoring: eval prod Agent Engine vs GCS baseline [prod]"
+  name            = "canary-quality-check"
+  description     = "Canary quality check: real-traffic agentic eval vs champion, drives promote/rollback [prod]"
   service_account = "projects/${var.project_id}/serviceAccounts/${local.cloud_run_sa}"
 
   source_to_build {
@@ -233,27 +238,31 @@ resource "google_cloudbuild_trigger" "nightly" {
     repo_type  = "GITHUB"
   }
 
-  filename = "cloudbuild/cloudbuild-nightly.yaml"
+  filename = "cloudbuild/canary-quality-check.yaml"
 
   substitutions = {
-    _EVAL_PROFILE               = "full"
-    _GOOGLE_CLOUD_LOCATION      = var.region
-    _FIRESTORE_DATABASE         = var.firestore_database_id
-    _AGENT_ENGINE_RESOURCE_NAME = var.agent_engine_resource_name
-    _STAGING_BUCKET             = "gs://${var.staging_bucket_name}"
-    _REGRESSION_THRESHOLD       = tostring(var.nightly_regression_threshold)
+    _GOOGLE_CLOUD_LOCATION           = var.region
+    _FIRESTORE_DATABASE              = var.firestore_database_id
+    _STAGING_BUCKET                  = "gs://${var.staging_bucket_name}"
+    _CANARY_CHECK_SINCE              = var.canary_check_since
+    _CANARY_CHECK_MIN_SESSIONS       = tostring(var.canary_check_min_sessions)
+    _CANARY_CHECK_RELATIVE_THRESHOLD = tostring(var.canary_check_relative_threshold)
+    _CANARY_CHECK_ABSOLUTE_FLOOR     = tostring(var.canary_check_absolute_floor)
   }
 
   depends_on = [google_project_service.apis]
 }
 
-# Cloud Scheduler — fires nightly trigger at midnight UTC
+# Cloud Scheduler — fires the canary quality check at midnight UTC.
+# Safe to run even with no canary live (the job no-ops in that case); while a
+# canary IS live, each run either promotes, rolls back, or holds (exit 2) if
+# not enough real sessions have accumulated yet since the last check.
 resource "google_cloud_scheduler_job" "nightly_eval" {
   count       = var.github_connected && local.is_prod ? 1 : 0
   project     = var.project_id
   region      = var.region
-  name        = "nightly-full-eval"
-  description = "Trigger regression monitoring pipeline nightly at midnight UTC"
+  name        = "canary-quality-check"
+  description = "Trigger canary quality check (real-traffic agentic eval) daily at midnight UTC"
   schedule    = "0 0 * * *"
   time_zone   = "UTC"
 

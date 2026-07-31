@@ -10,11 +10,21 @@
 #   5. Deploy Cloud Run as shadow revision (--no-traffic --tag sha-<SHORT_SHA>)
 #      Shadow revision already points to the new Agent Engine via env var
 #   6. Smoke tests against the shadow URL (zero prod users affected)
-#   7. Post-deploy eval against the new Agent Engine using eval_vertex.py
+#   7. Post-deploy eval against the new Agent Engine using eval_vertex.py —
+#      checks absolute thresholds AND a relative regression against the
+#      baseline (the last release that passed this gate; baseline only
+#      updates on pass, so it always reflects the last known-good release)
 #   8. If eval passes: split traffic (champion keeps (100-CANARY_PCT)%, canary gets CANARY_PCT%)
-#      If eval fails: build fails, shadow stays at 0% traffic, no promotion
+#      If eval fails: build fails, shadow stays at 0% traffic, no promotion, baseline untouched
 #
-# Rollback (if nightly fails after promotion):
+# Canary lifecycle after this pipeline (promotion to 100% / rollback):
+#   see tests/eval_agent_platform.py's `canary-check` mode — compares canary
+#   vs champion on REAL production traffic scored on agentic behavior
+#   (not infra health), since that's the one thing this fixed-dataset gate
+#   structurally cannot observe. Run manually or on a schedule while a
+#   canary is live; not part of this release pipeline itself.
+#
+# Manual rollback:
 #   gcloud run services update-traffic customer-support-app \
 #     --to-revisions=CHAMPION_REVISION=100 --region=us-central1 --project=PROJECT_ID
 #   gcloud run services update customer-support-app \
@@ -49,6 +59,7 @@ substitutions:
   _MODEL_ARMOR_TEMPLATE_ID: ""
   _CANARY_TRAFFIC_PERCENT: "10"     # % of traffic to send to canary after eval passes
   _EVAL_DATASET: "tests/post_deploy/datasets/post_deploy_cases.json"
+  _REGRESSION_THRESHOLD: "0.10"     # max allowed relative score drop vs the last release that passed this gate
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -291,7 +302,14 @@ steps:
   # Post-deploy eval — evaluate the NEW Agent Engine directly via eval_vertex.py.
   # Uses async_stream_query() (--custom-inference) for multi-agent support.
   # Writes scores to /workspace/eval_scores.json.
-  # Exits 0 if thresholds pass, 1 if they fail (blocks enable-canary).
+  #
+  # This is the pipeline's regression gate: it checks BOTH absolute
+  # per-metric thresholds AND a relative comparison against the baseline
+  # (the last release that passed this same gate — see --update-baseline).
+  # The baseline only updates when this run passes, so it always represents
+  # "the last known-good release," not just "whatever ran last time."
+  #
+  # Exits 0 if both checks pass, 1 if either fails (blocks enable-canary).
   # ===========================================================================
   - id: "post-deploy-eval"
     name: "python:${_PYTHON_VERSION}-slim"
@@ -309,6 +327,8 @@ steps:
           --dataset "${_EVAL_DATASET}" \
           --custom-inference \
           --output /workspace/eval_scores.json \
+          --update-baseline "${_STAGING_BUCKET}/baselines/release-baseline.json" \
+          --regression-threshold ${_REGRESSION_THRESHOLD} \
           --delay 5
     env:
       - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"

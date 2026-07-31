@@ -25,6 +25,9 @@ COST OPTIMIZATION:
 import os
 from typing import Any, Dict
 
+from google.adk.models import Gemini
+from google.genai import types as genai_types
+
 # =============================================================================
 # ENVIRONMENT CONFIGURATION
 # =============================================================================
@@ -270,7 +273,7 @@ CRITICAL: Call the tool exactly ONCE and return the result. Do not loop or retry
 # stricter or domain-specific policy is required.
 
 MODEL_ARMOR_CONFIG = {
-    # Master switch — set MODEL_ARMOR_ENABLED=true in Cloud Run / .env
+    # Primary switch — set MODEL_ARMOR_ENABLED=true in Cloud Run / .env
     "enabled": os.environ.get("MODEL_ARMOR_ENABLED", "false").lower() == "true",
     # Optional template for fine-grained per-deployment policy
     # Format: projects/{project}/locations/{location}/templates/{template_id}
@@ -280,6 +283,74 @@ MODEL_ARMOR_CONFIG = {
     # INSPECT_AND_BLOCK = reject requests that violate thresholds
     "floor_mode": os.environ.get("MODEL_ARMOR_MODE", "INSPECT_AND_BLOCK"),
 }
+
+# =============================================================================
+# GEMINI SAFETY SETTINGS
+# =============================================================================
+# Model Armor (above) screens prompts/responses via an external service. This
+# is a separate, independent layer: Gemini's own native per-response harm
+# filters. It's robust against jailbreaks (the filter runs outside the model
+# being jailbroken) but only applies to response filtering, not prompts.
+# Threshold philosophy matches the RAI filters already configured in
+# terraform/modules/core/model_armor.tf.
+
+SAFETY_SETTINGS = [
+    genai_types.SafetySetting(
+        category=genai_types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold=genai_types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    ),
+    genai_types.SafetySetting(
+        category=genai_types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold=genai_types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    ),
+    genai_types.SafetySetting(
+        category=genai_types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold=genai_types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    ),
+    genai_types.SafetySetting(
+        category=genai_types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold=genai_types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    ),
+]
+
+
+def get_generate_content_config() -> genai_types.GenerateContentConfig:
+    """Shared GenerateContentConfig (safety settings) for all agent constructions."""
+    return genai_types.GenerateContentConfig(safety_settings=SAFETY_SETTINGS)
+
+
+# =============================================================================
+# LLM RETRY CONFIGURATION
+# =============================================================================
+# Exponential backoff for transient Gemini API errors (rate limits, transient
+# server errors). Applies to every agent's own reasoning calls AND, since
+# AgentTool-wrapped sub-agent invocations are themselves Gemini calls made by
+# that sub-agent's own model, to inter-agent communication as well.
+#
+# This is off by default in the underlying google-genai client — HttpOptions.
+# retry_options is None unless explicitly set (retry_args(None) resolves to
+# "stop after 1 attempt, reraise"), so without this every agent construction
+# would get zero retries on a 429/5xx.
+
+LLM_RETRY_OPTIONS = genai_types.HttpRetryOptions(
+    attempts=5,
+    initial_delay=1.0,
+    max_delay=20.0,
+    exp_base=2.0,
+    jitter=1.0,
+    http_status_codes=[408, 429, 500, 502, 503, 504],
+)
+
+
+def get_model_with_retry(agent_key: str) -> Gemini:
+    """Build a Gemini model instance with retry_options attached.
+
+    Use this instead of passing config["model"] (a plain string) directly to
+    Agent(model=...), so transient API errors are retried with exponential
+    backoff instead of failing the turn immediately.
+    """
+    return Gemini(model=get_model_for_agent(agent_key), retry_options=LLM_RETRY_OPTIONS)
+
 
 # =============================================================================
 # RAG SEARCH CONFIGURATION

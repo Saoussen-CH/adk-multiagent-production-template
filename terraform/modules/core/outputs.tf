@@ -34,7 +34,7 @@ output "cloud_run_sa" {
 }
 
 output "nightly_trigger_id" {
-  description = "Cloud Build nightly trigger ID (used by Cloud Scheduler and for manual runs). Empty until github_connected=true and environment=prod."
+  description = "Cloud Build canary quality check trigger ID (used by Cloud Scheduler and for manual runs). Empty until github_connected=true and environment=prod."
   value       = var.github_connected && var.environment == "prod" ? google_cloudbuild_trigger.nightly[0].trigger_id : ""
 }
 
@@ -50,7 +50,7 @@ output "model_armor_template_name" {
 
 output "next_steps" {
   description = "Post-apply checklist."
-  value = <<-EOT
+  value       = <<-EOT
     Infrastructure is ready (environment: ${var.environment}). Next steps:
 
     1. Seed Firestore with demo data:

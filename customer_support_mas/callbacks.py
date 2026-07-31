@@ -121,15 +121,12 @@ async def auto_save_to_memory(callback_context):
                 "Saving session to Memory Bank (agent=%s, user=%s, events=%d)", agent_name, user_id, len(events)
             )
 
-            if hasattr(memory_service, "add_session_to_memory"):
-                result = await memory_service.add_session_to_memory(session)
-                logger.debug("Session sent to Memory Bank, result: %s", result)
-            elif hasattr(memory_service, "add_memory"):
-                for event in events[-5:]:
-                    await memory_service.add_memory(user_id=user_id, content=str(event), session_id=session_id)
-                logger.debug("Events saved using add_memory fallback")
-            else:
-                logger.debug("Memory service has no add_session_to_memory method")
+            # add_session_to_memory is part of BaseMemoryService's actual interface
+            # (confirmed on both BaseMemoryService and VertexAiMemoryBankService in
+            # the pinned google-adk>=1.19.0) — no other fallback method exists on
+            # that interface, so there's nothing else to fall back to.
+            result = await memory_service.add_session_to_memory(session)
+            logger.debug("Session sent to Memory Bank, result: %s", result)
 
         except Exception as save_error:
             logger.error("Memory save failed: %s", save_error, exc_info=True)

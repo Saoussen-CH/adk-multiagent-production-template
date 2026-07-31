@@ -16,6 +16,7 @@ from customer_support_mas.auth import (
     requires_order_ownership,
 )
 from customer_support_mas.database import db_client
+from customer_support_mas.error_handling import tool_error_handler
 from customer_support_mas.validation import (
     validate_invoice_id,
     validate_order_id,
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+@tool_error_handler
 @requires_invoice_ownership
 def get_invoice(invoice_id: str, tool_context: ToolContext, _invoice_data: dict = None, **kwargs) -> dict:
     """Get invoice by invoice ID (e.g., INV-2025-001). Only accessible if the invoice belongs to you.
@@ -47,6 +49,7 @@ def get_invoice(invoice_id: str, tool_context: ToolContext, _invoice_data: dict 
     return {"status": "success", "invoice": {"invoice_id": invoice_id, **_invoice_data}}
 
 
+@tool_error_handler
 @requires_order_ownership
 def get_invoice_by_order_id(order_id: str, tool_context: ToolContext, _order_data: dict = None, **kwargs) -> dict:
     """Get invoice by order ID (e.g., ORD-12345). Only accessible if the order belongs to you.
@@ -75,6 +78,7 @@ def get_invoice_by_order_id(order_id: str, tool_context: ToolContext, _order_dat
     return {"status": "not_found", "message": f"No invoice found for order {order_id}"}
 
 
+@tool_error_handler
 @requires_authenticated_user
 def get_my_invoices(tool_context: ToolContext, _user_id: str = None, **kwargs) -> dict:
     """Get all invoices for the authenticated user.
@@ -108,6 +112,7 @@ def get_my_invoices(tool_context: ToolContext, _user_id: str = None, **kwargs) -
 # =============================================================================
 
 
+@tool_error_handler
 @requires_order_ownership
 def check_payment_status(order_id: str, tool_context: ToolContext, _order_data: dict = None, **kwargs) -> dict:
     """Check payment status for an order. Only accessible if the order belongs to you.
@@ -127,6 +132,7 @@ def check_payment_status(order_id: str, tool_context: ToolContext, _order_data: 
     return {"status": "not_found", "message": f"No payment record found for order {order_id}"}
 
 
+@tool_error_handler
 @requires_authenticated_user
 def get_my_payments(tool_context: ToolContext, _user_id: str = None, **kwargs) -> dict:
     """Get all payment records for the authenticated user.
