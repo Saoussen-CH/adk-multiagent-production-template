@@ -99,11 +99,18 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
     ApprovalError("not_pending") on the second call instead of writing a
     second refund record.
     """
+    request = _get_request(db, request_id)
     doc_ref = db.collection(REFUND_REQUESTS_COLLECTION).document(request_id)
-    snap = doc_ref.get()
-    if not snap.exists:
-        raise ApprovalError("not_found", f"No refund request found with id {request_id!r}")
-    request = snap.to_dict()
+
+    # Dual control — checked as soon as the request is known to exist, before
+    # any status/eligibility check or write. This must come before the
+    # not_pending check below: if the original requester attempts to
+    # "approve" their own request regardless of its current status (even one
+    # already resolved by someone else), that is a self-approval *attempt*
+    # and must be reported as such — not masked behind a generic not_pending
+    # code — so audit/alerting logic built on these error codes can see it.
+    if approver_id == request.get("user_id"):
+        raise ApprovalError("self_approval", "Approver cannot be the original requester")
 
     # Idempotency gate — re-read-and-check immediately before any write.
     # No write happens between this check and the writes below, so this is
@@ -111,10 +118,6 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
     # docstring for the real-Firestore-transaction caveat).
     if request.get("status") != PENDING_APPROVAL:
         raise ApprovalError("not_pending", f"Refund request {request_id!r} is not pending approval")
-
-    # Dual control — cannot approve your own refund request.
-    if approver_id == request.get("user_id"):
-        raise ApprovalError("self_approval", "Approver cannot be the original requester")
 
     order_id = request["order_id"]
     user_id = request["user_id"]  # the ORIGINAL requester, not the approver
@@ -134,6 +137,10 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
         "reason": reason,
         "reason_category": reason_category,
         "status": "pending",  # the refund's OWN lifecycle status (pending/cancelled)
+        # Intentionally naive (no tzinfo), unlike approved_at/rejected_at below —
+        # this mirrors the pre-HITL process_refund code exactly (verified against
+        # git history). Do not "fix" this into timezone-aware; that would be a
+        # regression in the refund record's historical shape.
         "created_at": datetime.now().isoformat(),
         "items": items,
         "total_refund_amount": refund_amount,
@@ -159,11 +166,8 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
 
 def reject_refund(db, request_id: str, approver_id: str, note: str = "") -> Dict[str, Any]:
     """Reject a pending refund request. Never writes to the refunds collection."""
+    request = _get_request(db, request_id)
     doc_ref = db.collection(REFUND_REQUESTS_COLLECTION).document(request_id)
-    snap = doc_ref.get()
-    if not snap.exists:
-        raise ApprovalError("not_found", f"No refund request found with id {request_id!r}")
-    request = snap.to_dict()
 
     if request.get("status") != PENDING_APPROVAL:
         raise ApprovalError("not_pending", f"Refund request {request_id!r} is not pending approval")

@@ -157,6 +157,32 @@ def test_self_approval_blocked():
     assert request_doc["status"] == "PENDING_APPROVAL"
 
 
+def test_self_approval_reported_even_when_already_resolved():
+    """Check ordering: self_approval must be reported before not_pending.
+
+    If the original requester later attempts to "approve" their own
+    request — even one that's no longer PENDING_APPROVAL because a
+    different (legitimate) approver already resolved it — the error code
+    must still be self_approval, not a generic not_pending. Masking a
+    self-approval *attempt* behind not_pending would hide a fraud-relevant
+    signal from any audit/alerting logic built on these error codes.
+    """
+    db = MockFirestoreClient()
+    rid = _stage(db, user_id="demo-user-001")
+    # A different, legitimate approver resolves the request first.
+    approve_refund(db, rid, approver_id="approver-1")
+    assert db.collection("refund_requests").document(rid).get().to_dict()["status"] == "APPROVED"
+
+    # The original requester now attempts to "approve" their own
+    # already-resolved request.
+    with pytest.raises(ApprovalError) as exc:
+        approve_refund(db, rid, approver_id="demo-user-001")
+
+    assert exc.value.code == "self_approval"
+    # No second refund record was written.
+    assert len(list(db.collection("refunds").stream())) == 1
+
+
 def test_reject_does_not_execute():
     db = MockFirestoreClient()
     rid = _stage(db)
