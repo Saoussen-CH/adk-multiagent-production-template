@@ -23,6 +23,7 @@ dependencies = [
     "pandas>=2.0",
     "ipython>=9.10.0",
     "google-cloud-modelarmor>=0.4.0",
+    "mcp>=1.8,<2",
 ]
 
 [tool.setuptools.packages.find]
