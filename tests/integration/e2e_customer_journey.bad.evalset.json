@@ -138,7 +138,7 @@
           "final_response": {
             "parts": [
               {
-                "text": "A refund of $199.99 for order ORD-67890 has been submitted successfully. Your refund ID is REF-67890-01. Please allow 3-5 business days for processing.",
+                "text": "A refund request of $199.99 for order ORD-67890 has been submitted for approval. Your request ID is REFREQ-67890-a1b2c3d4. A human reviewer will finalize it soon.",
                 "thought_signature": "CrcDAY89a1_e1dy9H19Efvhy4epm5p9zntmt5pm3jz5WzcdE-eiRtgWzgaej9g8KtuEB8SpPScXTXpCPYUs779bo84ZNqZSQew63yCcMNydzVhF6Ee7-NBYlECHGI_mjkUGrImA_8Ew5dd5m7uC3jgu5T9NXzunjvFsTw97i2aK04CClaZUb6kkfz7VFukUF_BHWt6apyTR4v9X2QrCxZL8pv0uRaDQufzg6_58humcT4jTtFX5lYe6b7P36lydOnl2IHZ2vSq-V3XhkKW4cG5K63GlZZu5Bvw-2Ob5mKIlQsTxhmjss641dNDNg96xiIno64erVjSzl5qGNPYn9Z9K8yQSuteBeyzNKhBDW92sVPkxRVscj_vJs02x88xeVPdwh0z0QT3LNNqOXa3IBzBqMHEn8c147omUOQ7XtCtOQhkOlANT9fOBynHV8CvYh7vZPxgtFNnvBnJAxpgEqNEHkJ634O8JChEl4UqYjg4JkHyF-UlpJsK-maK8AxSDTFd5z42Wu9lXtTNBfNRHopeTa1fTIh_Vg-bfcSMPM6xYBH6_1MtA0B9MisnJwHmNjcnhcbbZ4V4ZmvQ=="
               }
             ],
@@ -222,7 +222,7 @@
                         "id": "adk-d3202615-2006-416c-9bb8-ebae612d0317",
                         "name": "refund_workflow",
                         "response": {
-                          "result": "A refund of $199.99 for order ORD-67890 has been submitted successfully. Your refund ID is REF-67890-01. Please allow 3-5 business days for processing."
+                          "result": "A refund request of $199.99 for order ORD-67890 has been submitted for approval. Your request ID is REFREQ-67890-a1b2c3d4. A human reviewer will finalize it soon."
                         }
                       }
                     }

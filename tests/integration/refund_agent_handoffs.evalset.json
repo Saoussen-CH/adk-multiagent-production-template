@@ -92,7 +92,7 @@
           "final_response": {
             "parts": [
               {
-                "text": "The refund for order ORD-67890 has been submitted successfully. A refund of $199.99 for \"Wireless Headphones Pro\" (PROD-002) has been initiated. Your refund ID is REF-67890-01. Please allow 3-5 business days for processing.",
+                "text": "The refund request for order ORD-67890 has been submitted for approval. A refund of $199.99 for \"Wireless Headphones Pro\" (PROD-002) is pending review. Your request ID is REFREQ-67890-a1b2c3d4. A human reviewer will finalize it once approved.",
                 "thought_signature": "CtAGAY89a197m8A005Ehz-CDZkUbbHnA6y59eR1S-4tHo__HRRoWvQ-trlcQ9S3Cz_uuimlv2pU1OLUbDKJfUfpQ7A-PbsM3GGGvr8lQ565laD71ZaxNCf1ynVEgsU7x-i82xlyaPb2h7m5RBImy75leYpsMAl41XIXzPk4RnyLu01zc8vMs2toSHOF65tzi6efVcoa5W_UJpRKdP0WnXPsFF0jHGLqYpBsOPWZxTlbxtomKa7UkGSjKeOzYSjHJ0NfcQGCU6qu-3fgp7lJV2A_uUpJdVoiryXSyDWQgjZ9vR8VodjUnvcFGbay8G4LdCZEF2JkMG7saBfpYYEr8YCS8tzfQPj2sqbNkl_ntCd5o747ysVoi33YFeMF6MUueyWgAKn9q8WnHvTg4M9OYduuTbcQYFB9FR8Ual623duNfcIyenY3ukEMNaXBjr0rLnLVTpnheqNszJT-pz8hrA9SQH-SGnIxxo8Sxbhh8XWtK9PB4HGZzWUMzKzgroJMBtQqTYKnB8M0BKR8r-40q20CMviIXH56Wp80bVgnNunpbJg-D_8VBgBlWypnWncqiomaH6dp4bX3CUPFox0egz-GhCY67QMyByDqz1m0gSxCiA4z8FjntgQ3K-A-uNsfwBdpfwzakeoFF2fmZXPId7LfPAR-9RRrTnidetTR5-X-gT7rRfXwnWgAseyBsfrvHTudhnRs2y-yJP9xh8zufizj9IrDf10sbs8wlQV0zWOBBK0kW7zcWAqsypTs9R9RIo-PH_2H1gP9VVCdlgJ0p8wABmQR0Rli_veLeAuUDnHaRwxgqfXZoPgHrQycpX4YmVUSHMHiOj4ElXXIJd5bHlDVaUR4WjXZpbYm8aI11-k1eL93IYTY0iGKzaujj-8KLgjbSaW7A4-LJ64keAUR1JAFHXv5aNbrQgtH5wVs-pwcbR2akRehcr-qvMifmqrrhxWrG4lzU1zLiK8dCGDRFaybzG55hQjXuLfOd-Kc0nBto9aMsZJO7vXVmq_p1809Gw48_kfX8wl7B39ZKy2G8giNOyqbMPkNBMcuDKFhS1G2RNmEyU5Cnb0Br6m9gBpWTbdhe_APSwP29Tgdve5fwBx33DaJjKGdGLC3ITdj75YI9sy8="
               }
             ],
@@ -127,7 +127,7 @@
                         "id": "adk-d2b8eb04-1f84-4011-8498-09d4729592c5",
                         "name": "refund_workflow",
                         "response": {
-                          "result": "The refund for order ORD-67890 has been submitted successfully. A refund of $199.99 for \"Wireless Headphones Pro\" (PROD-002) has been initiated. Your refund ID is REF-67890-01. Please allow 3-5 business days for processing."
+                          "result": "The refund request for order ORD-67890 has been submitted for approval. A refund of $199.99 for \"Wireless Headphones Pro\" (PROD-002) is pending review. Your request ID is REFREQ-67890-a1b2c3d4. A human reviewer will finalize it once approved."
                         }
                       }
                     }

@@ -12,7 +12,8 @@ Note: We use helper functions instead of decorators because
 """
 
 import logging
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from google.adk.tools.tool_context import ToolContext
@@ -419,14 +420,14 @@ def check_refund_eligibility(order_id: str, tool_context: ToolContext) -> dict:
 @tool_error_handler
 def process_refund(order_id: str, reason: str, tool_context: ToolContext) -> dict:
     """
-    Step 3: Process the refund.
+    Step 3: Stage the refund request for human approval.
 
-    Creates refund record with:
-    - Specific items being refunded
-    - Refund amount
-    - Customer tracking
-    - Prevents duplicate refunds by recording refunded items
-    - Validates refund reason is acceptable
+    This tool NEVER executes a refund - it only stages a PENDING_APPROVAL
+    request in the `refund_requests` collection for a human reviewer to
+    finalize. It:
+    - Validates the refund reason is acceptable
+    - Records the specific items and refund amount being requested
+    - Prevents duplicate staging (idempotent per order+user)
 
     Args:
         order_id: The order ID to refund
@@ -434,7 +435,7 @@ def process_refund(order_id: str, reason: str, tool_context: ToolContext) -> dic
         tool_context: ADK ToolContext (automatically injected)
 
     Returns:
-        dict with refund confirmation including refund_id and amount, or rejection if reason not acceptable
+        dict with staging confirmation including request_id and amount, or rejection if reason not acceptable
     """
     # Input validation
     is_valid, error_msg = validate_order_id(order_id)
@@ -493,51 +494,60 @@ def process_refund(order_id: str, reason: str, tool_context: ToolContext) -> dic
 
         refund_amount = _calculate_refund_amount(eligible_items)
 
-    # Generate refund ID
-    existing_refunds = _get_existing_refunds(order_id)
-    refund_sequence = len(existing_refunds) + 1
-    refund_id = f"REF-{order_id.replace('ORD-', '')}-{refund_sequence:02d}"
+    # Idempotency check: don't stage a second request while one is already pending
+    # for this (order, user). MockCollection/real Firestore both support a single
+    # .where() call reliably; a second chained .where() is not supported by the
+    # mock, so we filter user_id/status in Python after a single-field query.
+    existing_docs = list(db_client.collection("refund_requests").where("order_id", "==", order_id).stream())
+    existing_pending = [
+        d
+        for d in existing_docs
+        if d.to_dict().get("user_id") == user_id and d.to_dict().get("status") == "PENDING_APPROVAL"
+    ]
+    if existing_pending:
+        doc = existing_pending[0]
+        logger.info(f"[Refund Workflow - Step 3] Duplicate request for order {order_id} - returning existing {doc.id}")
+        audit_log(user_id, "stage_refund", "order", order_id, True, f"duplicate request - returned existing {doc.id}")
+        return {
+            "status": "already_pending",
+            "request_id": doc.id,
+            "message": "A refund request for this order is already awaiting approval.",
+        }
 
-    # Create refund record
-    refund_record = {
-        "refund_id": refund_id,
+    # Generate a request ID and stage the refund as a pending approval record.
+    # This tool NEVER executes a refund or writes to the "refunds" collection -
+    # a human reviewer must approve the request before any money moves.
+    request_id = f"REFREQ-{order_id.replace('ORD-', '')}-{uuid.uuid4().hex[:8]}"
+
+    now = datetime.now(timezone.utc)
+    request_doc = {
         "order_id": order_id,
-        "customer_id": user_id,
+        "user_id": user_id,
+        "items": eligible_items,
+        "refund_amount": refund_amount,
         "reason": reason,
-        "reason_category": reason_category,  # Categorized reason for analytics
-        "status": "pending",
-        "created_at": datetime.now().isoformat(),
-        "items": [
-            {
-                "product_id": item["product_id"],
-                "name": item["name"],
-                "qty": item.get("qty", 1),
-                "price": item["price"],
-                "refund_amount": item["price"] * item.get("qty", 1),
-            }
-            for item in eligible_items
-        ],
-        "total_refund_amount": refund_amount,
-        "original_order_total": order_data.get("total", 0),
+        "reason_category": reason_category,
+        "status": "PENDING_APPROVAL",
+        "requested_at": now.isoformat(),
+        "expires_at": (now + timedelta(hours=72)).isoformat(),
     }
 
-    db_client.collection("refunds").document(refund_id).set(refund_record)
+    db_client.collection("refund_requests").document(request_id).set(request_doc)
 
-    audit_log(user_id, "process_refund", "order", order_id, True, f"Refund {refund_id} created for ${refund_amount}")
+    audit_log(user_id, "stage_refund", "order", order_id, True, f"staged {request_id} for ${refund_amount}")
 
-    logger.info(f"[Refund Workflow - Step 3] Refund {refund_id} created: ${refund_amount}")
+    logger.info(f"[Refund Workflow - Step 3] Refund request {request_id} staged for approval: ${refund_amount}")
 
     return {
-        "status": "success",
-        "refund_id": refund_id,
+        "status": "pending_approval",
+        "request_id": request_id,
         "order_id": order_id,
         "refund_amount": refund_amount,
-        "items_refunded": [
-            {"product_id": i["product_id"], "name": i["name"], "price": i["price"]} for i in eligible_items
-        ],
-        "refund_status": "pending",
-        "message": f"Refund of ${refund_amount} submitted successfully. Refund ID: {refund_id}",
-        "estimated_processing": "3-5 business days",
+        "items": eligible_items,
+        "message": (
+            "Your refund request has been submitted for approval. "
+            "You'll be notified once it's reviewed."
+        ),
     }
 
 

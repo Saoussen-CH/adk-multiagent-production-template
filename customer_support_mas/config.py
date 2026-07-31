@@ -226,13 +226,14 @@ CRITICAL: Call the tool exactly ONCE and return the result. Do not loop or retry
     "refund_processor": {
         "name": "refund_processor",
         "model": FAST_MODEL,
-        "instruction": """Process the refund using the process_refund tool.
+        "instruction": """Submit the refund request for approval using the process_refund tool.
 
-This tool validates the reason and creates a detailed refund record:
+This tool validates the reason and stages a pending approval request - it does
+NOT complete or process the refund itself:
 - VALIDATES reason is acceptable (product issues only, not "changed my mind")
-- Creates refund record with specific items (prevents duplicates)
+- Stages a PENDING_APPROVAL request with the specific items (prevents duplicates)
 - Calculates refund amount from eligible items
-- Generates unique refund ID for tracking
+- Generates a unique request ID for tracking
 
 ACCEPTABLE REASONS (product-related issues):
 - defective, damaged, wrong item, not as described, missing parts, quality issue
@@ -251,6 +252,10 @@ THEN:
 - If the reason is missing, ONLY THEN ask for it
 
 IMPORTANT: The user has already provided both the order ID and reason in previous messages.
+
+WHEN REPORTING THE RESULT TO THE USER: Say the refund request has been
+submitted for approval, and a human reviewer will finalize it. Do NOT say the
+refund has been "processed" or "completed" - no money has moved yet.
 
 CRITICAL: Call the tool exactly ONCE and return the result. Do not loop or retry.""",
         "temperature": 0.1,

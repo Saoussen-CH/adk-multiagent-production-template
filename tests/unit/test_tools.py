@@ -290,17 +290,20 @@ class TestWorkflowTools:
         assert not result.get("eligible")
 
     def test_process_refund_success(self, mock_tool_context, firestore_client):
-        """Test processing a refund successfully."""
+        """Test that a valid refund request is staged for approval, not executed."""
         from customer_support_mas.agents.refund.tools import process_refund
 
         result = process_refund(order_id="ORD-67890", reason="Product is defective", tool_context=mock_tool_context)
 
-        assert result["status"] == "success"
-        assert "refund_id" in result
+        assert result["status"] == "pending_approval"
+        assert "request_id" in result
 
-        # Cleanup - delete the test refund
-        refund_id = result["refund_id"]
-        firestore_client.collection("refunds").document(refund_id).delete()
+        # Nothing was executed - no refund record was written.
+        assert list(firestore_client.collection("refunds").stream()) == []
+
+        # Cleanup - delete the staged request
+        request_id = result["request_id"]
+        firestore_client.collection("refund_requests").document(request_id).delete()
 
     def test_process_refund_invalid_order(self, mock_tool_context):
         """Test processing refund for invalid order."""
@@ -429,13 +432,16 @@ class TestRefundWorkflowIntegration:
         assert eligibility_result["status"] == "success", f"Eligibility check failed: {eligibility_result}"
         assert eligibility_result["eligible"], f"Order not eligible: {eligibility_result}"
 
-        # Step 3: Process refund
+        # Step 3: Process refund (stages a pending approval request, does not execute)
         refund_result = process_refund(order_id, reason, tool_context=mock_tool_context)
-        assert refund_result["status"] == "success", f"Refund failed: {refund_result}"
-        assert "refund_id" in refund_result
+        assert refund_result["status"] == "pending_approval", f"Staging failed: {refund_result}"
+        assert "request_id" in refund_result
+
+        # Nothing was executed - no refund record was written.
+        assert list(firestore_client.collection("refunds").stream()) == []
 
         # Cleanup
-        firestore_client.collection("refunds").document(refund_result["refund_id"]).delete()
+        firestore_client.collection("refund_requests").document(refund_result["request_id"]).delete()
 
     def test_refund_workflow_stops_at_invalid_order(self, mock_tool_context):
         """Test workflow stops at validation for invalid order."""
@@ -478,13 +484,13 @@ class TestRefundWorkflowIntegration:
         assert precheck["eligible"]
         assert "next_step" in precheck  # Should prompt for reason
 
-        # Step 2: User provides reason, process refund
+        # Step 2: User provides reason, refund request is staged for approval
         reason = "Product arrived damaged"
         result = process_refund(order_id, reason, tool_context=mock_tool_context)
-        assert result["status"] == "success"
+        assert result["status"] == "pending_approval"
 
         # Cleanup
-        firestore_client.collection("refunds").document(result["refund_id"]).delete()
+        firestore_client.collection("refund_requests").document(result["request_id"]).delete()
 
 
 if __name__ == "__main__":

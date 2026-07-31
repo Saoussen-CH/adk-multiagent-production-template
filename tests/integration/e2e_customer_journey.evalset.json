@@ -346,7 +346,7 @@
           "final_response": {
             "parts": [
               {
-                "text": "Your refund for order ORD-67890 has been submitted successfully with Refund ID: REF-67890-01. The amount of $199.99 for Wireless Headphones Pro will be processed within 3-5 business days.",
+                "text": "Your refund request for order ORD-67890 has been submitted for approval, Request ID: REFREQ-67890-a1b2c3d4. A human reviewer will finalize the $199.99 refund for Wireless Headphones Pro once it's approved.",
                 "thought_signature": "CroGAY89a18PozGZ_8Dxgew0rSn3bpNN26eTGsJGwiAa49FCUN3lnfP2aZbf7Tcwvfx9flVzsnjs42MB_wwgSzWKec6FdvGeubO53DNyEuaOiuufWq3Qy96FZfeY5a6nES9xiuvCvaLz9Qzr8-ag1lwHlALfzbfVRnRQEqube3bRqCwhoe_hXpK3AzgDIqgAOvLLdQkXMFOUWejwgCyjFMaDAb728aFUqxf0iNzpZ5A9XCK0xQ6hxdBZzQhLZ_xIbBZthLsWiCltLcFteaHSk5c2e3AfpPr5aOAjKUOIuI1i-4Gca2yDhkxhzhxRH9PJItZhNIsZYlk0HELzpafpji0sAafgueXW87AnLWQM0443rKmGsiHw9zvtSBHDVEEPERHyrBFLgKSTi6M1gFuSno9f8_Tr_D8r3ppL8_G2DknjrvCsc9S-y0oureetGUJ9uZ-la7x4_gOsSN4qn9gVt7JPwHqd62wCqW23lzFnna299X8waKgIt4oZmZ5_Ef2RrhMljUP3GuP8ebncgjHYN7ySRmlgvlR-nUuIm5NWMnVondDl89VQXtkNxKvDjh-mVpD8aoZ2rouSxZdtsmpMuVcbqCd8iKAtPQbSqHiB-8pN9W1CSzcY5k8TuKfLYpsRV_84RY5Cn4cnlXO-X51wmraVlvfvOcAVE4zESBnFHNQXu7fXecjvcgdcG3gShXtNOAyB5gnGcPna_CBWzcRWH-nSi-C1wqrHat6aBF0gTeeUhTO9QULSfg3AR3lL6E5ObGROZfqlEStYMvJX5xH6JRmq8IB9bM7tQX2VTu7wtTng6WmoVyr9KyGhrbJ-T7BBOtNGCzr4mF9t3wYTThtKFa-h_yz-nq8-_Za8_CajWWycizudo6a-xsbo_cknw-7Gn0abgUb_RUV2hpgMClRAL-6xwT0vdGM1xC6j-TuKWF0XOxgXU5CE5gtH7Kng64_x7-Ma9Bid1GTjxpnP3I2Sypp6LvMz3GWGJ2j5W7eBW-G4MGWkJPT6ZaPoQnbZG2nixkmUW8c38VfvN0HxNQyU-SnRb1ohOFXwnK7Npgf4fAjzLksJa12Z8pozA2acjhjTcFpOUHyneTAFujqpRg=="
               }
             ],
@@ -430,7 +430,7 @@
                         "id": "adk-ecb830bb-2cfb-4f4d-9918-0f5c29b3add7",
                         "name": "refund_workflow",
                         "response": {
-                          "result": "Your refund for order ORD-67890 has been submitted successfully with Refund ID: REF-67890-01. The amount of $199.99 for Wireless Headphones Pro will be processed within 3-5 business days."
+                          "result": "Your refund request for order ORD-67890 has been submitted for approval, Request ID: REFREQ-67890-a1b2c3d4. A human reviewer will finalize the $199.99 refund for Wireless Headphones Pro once it's approved."
                         }
                       }
                     }
