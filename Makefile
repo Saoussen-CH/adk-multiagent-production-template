@@ -43,7 +43,7 @@ ENV ?= dev
         eval-post-deploy \
         frontend-install frontend-build frontend-dev \
         deploy-agent-engine test-local \
-        deploy-cloud-run submit-build nightly \
+        deploy-cloud-run deploy-mcp-fedex submit-build nightly \
         bootstrap-tfstate terraform-init terraform-plan terraform-apply terraform-destroy infra-up
 
 # ==============================================================================
@@ -326,6 +326,10 @@ deploy-agent-engine: ## Deploy agent to Vertex AI Agent Engine (use ENV=staging|
 
 deploy-cloud-run: ## Build and deploy backend to Cloud Run
 	bash deployment/deploy-cloudrun.sh
+
+deploy-mcp-fedex: ## Deploy FedEx tracking MCP server to Cloud Run (FEDEX_MOCK=true|false; use ENV=staging|prod)
+	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
+	bash deployment/deploy-mcp-fedex.sh $(ENV_FILE)
 
 nightly: ## Trigger the canary quality check Cloud Build job (real-traffic agentic eval vs champion)
 	@# Override with SINCE=1d, MIN_SESSIONS=50, RELATIVE_THRESHOLD=0.15, ABSOLUTE_FLOOR=0.5

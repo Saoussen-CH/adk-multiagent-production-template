@@ -157,3 +157,9 @@ variable "quality_alert_notification_channels" {
   type        = list(string)
   default     = []
 }
+
+variable "fedex_secrets_enabled" {
+  description = "Create FedEx API credential secrets (values are set out-of-band via gcloud, never in Terraform)."
+  type        = bool
+  default     = false
+}
