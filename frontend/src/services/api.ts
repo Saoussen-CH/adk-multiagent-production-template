@@ -196,6 +196,68 @@ export const chatService = {
 // SESSION SERVICE
 // =============================================================================
 
+// =============================================================================
+// REFUND APPROVAL SERVICE (Task 10 — HITL approver API)
+// =============================================================================
+
+export interface RefundApprovalRequest {
+  request_id: string;
+  order_id: string;
+  user_id: string;
+  refund_amount: number;
+  reason: string;
+  reason_category: string;
+  status: string;
+  requested_at: string;
+  expires_at?: string;
+}
+
+export interface RefundApprovalsPendingResponse {
+  requests: RefundApprovalRequest[];
+}
+
+export interface RefundApprovalActionResponse {
+  status: string;
+  refund_id?: string;
+}
+
+// Deliberately NOT wrapped in withRetry(): the caller (RefundApprovals.tsx)
+// needs the raw AxiosError (in particular error.response.status) to decide
+// whether to render null (401/403 — not an approver) versus show a toast
+// (any other failure). withRetry() replaces thrown errors with a generic
+// Error carrying only a friendly message, which would throw away the status
+// code this component's self-hiding behavior depends on.
+export const refundApprovalService = {
+  async getPending(): Promise<RefundApprovalsPendingResponse> {
+    const headers = getAuthHeaders();
+    const response = await apiClient.get<RefundApprovalsPendingResponse>(
+      '/api/admin/refunds/pending',
+      { headers }
+    );
+    return response.data;
+  },
+
+  async approve(requestId: string): Promise<RefundApprovalActionResponse> {
+    const headers = getAuthHeaders();
+    const response = await apiClient.post<RefundApprovalActionResponse>(
+      `/api/admin/refunds/${requestId}/approve`,
+      {},
+      { headers }
+    );
+    return response.data;
+  },
+
+  async reject(requestId: string, note: string): Promise<RefundApprovalActionResponse> {
+    const headers = getAuthHeaders();
+    const response = await apiClient.post<RefundApprovalActionResponse>(
+      `/api/admin/refunds/${requestId}/reject`,
+      { note },
+      { headers }
+    );
+    return response.data;
+  },
+};
+
 export const sessionService = {
   async listSessions(): Promise<SessionListResponse> {
     const headers = getAuthHeaders();

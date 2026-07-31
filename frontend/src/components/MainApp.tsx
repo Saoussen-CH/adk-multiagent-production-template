@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import AuthScreen from './AuthScreen';
 import SessionSidebar from './SessionSidebar';
 import ChatInterface from './ChatInterface';
+import RefundApprovals from './RefundApprovals';
 
 export default function MainApp() {
   const { user, isLoading, logout } = useAuth();
@@ -130,6 +131,8 @@ export default function MainApp() {
             </div>
           </div>
         </div>
+
+        <RefundApprovals />
 
         <div className="chat-content">
           <ChatInterface

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth
+from . import auth, refund_approvals
 from .agent_client import agent_client
 from .config import settings
 from .database import get_database
@@ -159,6 +159,25 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> Optional[st
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
+    return user_id
+
+
+def require_approver(user_id: Optional[str] = Depends(get_current_user)) -> str:
+    """Dependency gating the refund-approval endpoints to approver-role users.
+
+    401 if unauthenticated (get_current_user returned None because no/invalid
+    Authorization header was supplied — get_current_user itself already
+    raises 401 for a malformed/invalid token, so this only needs to handle
+    the "no header at all" case where it returns None).
+    403 if authenticated but the user's Firestore doc has no role or a role
+    other than "approver". No pending-request data is returned in either
+    error case.
+    """
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user = db.get_user(user_id)
+    if not user or user.get("role") != "approver":
+        raise HTTPException(status_code=403, detail="Approver role required")
     return user_id
 
 
@@ -593,6 +612,37 @@ async def get_session_messages(
     except Exception as e:
         logger.error("Error fetching messages", error=str(e), session_id=session_id)
         raise HTTPException(status_code=500, detail="Failed to fetch messages")
+
+
+# =============================================================================
+# REFUND APPROVAL ENDPOINTS (HITL step 3 — approver API)
+# =============================================================================
+
+
+@app.get("/api/admin/refunds/pending")
+async def pending_refunds(approver_id: str = Depends(require_approver)):
+    """List all PENDING_APPROVAL refund requests. Approver-only."""
+    return {"requests": refund_approvals.list_pending(db.db)}
+
+
+@app.post("/api/admin/refunds/{request_id}/approve")
+async def approve_refund_endpoint(request_id: str, approver_id: str = Depends(require_approver)):
+    """Approve a pending refund request and execute the refund. Approver-only."""
+    try:
+        return refund_approvals.approve_refund(db.db, request_id, approver_id)
+    except refund_approvals.ApprovalError as exc:
+        status_code = {"not_found": 404, "not_pending": 409, "self_approval": 403}.get(exc.code, 400)
+        raise HTTPException(status_code=status_code, detail=str(exc))
+
+
+@app.post("/api/admin/refunds/{request_id}/reject")
+async def reject_refund_endpoint(request_id: str, body: dict = {}, approver_id: str = Depends(require_approver)):
+    """Reject a pending refund request. Never writes to the refunds collection. Approver-only."""
+    try:
+        return refund_approvals.reject_refund(db.db, request_id, approver_id, note=body.get("note", ""))
+    except refund_approvals.ApprovalError as exc:
+        status_code = {"not_found": 404, "not_pending": 409}.get(exc.code, 400)
+        raise HTTPException(status_code=status_code, detail=str(exc))
 
 
 @app.get("/api")
