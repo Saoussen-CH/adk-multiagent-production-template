@@ -35,6 +35,22 @@ def clear_refunds_before_test(mock_db):
         mock_db._collections["refunds"].clear()
 
 
+def _active_refund_db_client():
+    """Return the Firestore mock actually patched into the refund tools module.
+
+    NOTE: the `firestore_client`/`mock_db` fixture above wraps the
+    session-scoped mock_db fixture from tests/conftest.py, which is a
+    *different* MockFirestoreClient instance than the one the autouse,
+    function-scoped `mock_backends` fixture (tests/unit/conftest.py) patches
+    into `customer_support_mas.agents.refund.tools.db_client` for each test.
+    Reading state that process_refund actually wrote (or verifying it wrote
+    nothing) must go through this live module attribute, not the fixture.
+    """
+    from customer_support_mas.agents.refund import tools as refund_tools
+
+    return refund_tools.db_client
+
+
 @pytest.fixture
 def mock_tool_context():
     """Create a mock ToolContext for tools that need it.
@@ -289,7 +305,7 @@ class TestWorkflowTools:
         # Can be "not_eligible" or "success" with eligible=False depending on implementation
         assert not result.get("eligible")
 
-    def test_process_refund_success(self, mock_tool_context, firestore_client):
+    def test_process_refund_success(self, mock_tool_context):
         """Test that a valid refund request is staged for approval, not executed."""
         from customer_support_mas.agents.refund.tools import process_refund
 
@@ -298,12 +314,15 @@ class TestWorkflowTools:
         assert result["status"] == "pending_approval"
         assert "request_id" in result
 
-        # Nothing was executed - no refund record was written.
-        assert list(firestore_client.collection("refunds").stream()) == []
+        # Nothing was executed - no refund record was written. Checked against the
+        # actually-patched db_client, not the `firestore_client` fixture (which wraps a
+        # different, session-scoped mock instance - see _active_refund_db_client()).
+        db = _active_refund_db_client()
+        assert list(db.collection("refunds").stream()) == []
 
         # Cleanup - delete the staged request
         request_id = result["request_id"]
-        firestore_client.collection("refund_requests").document(request_id).delete()
+        db.collection("refund_requests").document(request_id).delete()
 
     def test_process_refund_invalid_order(self, mock_tool_context):
         """Test processing refund for invalid order."""
@@ -406,7 +425,7 @@ class TestCheckIfRefundable:
 class TestRefundWorkflowIntegration:
     """Test the complete refund workflow sequence."""
 
-    def test_full_refund_workflow_success(self, mock_tool_context, firestore_client):
+    def test_full_refund_workflow_success(self, mock_tool_context):
         """Test complete refund workflow: pre-check -> validate -> check -> process."""
         from customer_support_mas.agents.refund.tools import (
             check_if_refundable,
@@ -437,11 +456,14 @@ class TestRefundWorkflowIntegration:
         assert refund_result["status"] == "pending_approval", f"Staging failed: {refund_result}"
         assert "request_id" in refund_result
 
-        # Nothing was executed - no refund record was written.
-        assert list(firestore_client.collection("refunds").stream()) == []
+        # Nothing was executed - no refund record was written. Checked against the
+        # actually-patched db_client, not the `firestore_client` fixture (which wraps a
+        # different, session-scoped mock instance - see _active_refund_db_client()).
+        db = _active_refund_db_client()
+        assert list(db.collection("refunds").stream()) == []
 
         # Cleanup
-        firestore_client.collection("refund_requests").document(refund_result["request_id"]).delete()
+        db.collection("refund_requests").document(refund_result["request_id"]).delete()
 
     def test_refund_workflow_stops_at_invalid_order(self, mock_tool_context):
         """Test workflow stops at validation for invalid order."""
@@ -468,7 +490,7 @@ class TestRefundWorkflowIntegration:
 
         # Workflow should stop here - refund not processed
 
-    def test_new_conversational_flow(self, mock_tool_context, firestore_client):
+    def test_new_conversational_flow(self, mock_tool_context):
         """Test the new conversational refund flow:
         1. User requests refund (just order_id)
         2. System checks eligibility first
@@ -489,8 +511,8 @@ class TestRefundWorkflowIntegration:
         result = process_refund(order_id, reason, tool_context=mock_tool_context)
         assert result["status"] == "pending_approval"
 
-        # Cleanup
-        firestore_client.collection("refund_requests").document(result["request_id"]).delete()
+        # Cleanup - via the actually-patched db_client (see _active_refund_db_client()).
+        _active_refund_db_client().collection("refund_requests").document(result["request_id"]).delete()
 
 
 if __name__ == "__main__":
