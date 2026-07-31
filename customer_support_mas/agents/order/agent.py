@@ -14,6 +14,7 @@ from customer_support_mas.agents.order.tools import (
     get_order_history,
     track_order,
 )
+from customer_support_mas.agents.order.mcp import build_fedex_toolset
 
 # Import callbacks
 from customer_support_mas.callbacks import (
@@ -29,6 +30,18 @@ from customer_support_mas.config import get_agent_config, get_generate_content_c
 # =============================================================================
 
 order_config = get_agent_config("order_agent")
+
+_order_tools = [
+    track_order,  # Verifies ownership
+    get_order_history,  # Full order details for authenticated user
+    get_my_order_history,  # Order summary for authenticated user
+    get_order_details,  # Specific order details (verifies ownership)
+    preload_memory_tool.PreloadMemoryTool(),
+]
+_fedex_toolset = build_fedex_toolset()
+if _fedex_toolset is not None:
+    _order_tools.append(_fedex_toolset)
+
 order_agent = Agent(
     name=order_config["name"],
     model=get_model_with_retry("order_agent"),
@@ -45,12 +58,14 @@ AVAILABLE TOOLS:
 - get_order_history(): Full details of all orders including items and shipping
 - get_order_details(order_id): Complete details for a specific order
 - track_order(order_id): Tracking info for a specific order (carrier, timeline)
+- track_shipment(tracking_number): LIVE carrier tracking via FedEx — use when the user asks for real-time courier status and track_order() shows a FedEx tracking number. Pass that tracking number.
 
 TOOL SELECTION:
 - "show my orders" / "order history" → get_my_order_history() for quick summary
 - "full details of my orders" / "what did I order?" → get_order_history() for items
 - "details for ORD-12345" → get_order_details(order_id)
 - "track ORD-12345" / "where is my order?" → track_order(order_id)
+- "where is it right now?" / live courier status → track_order(order_id) first to get the tracking number, then track_shipment(tracking_number)
 
 MEMORY-AWARE BEHAVIOR:
 - Check preloaded memories for recurring delivery issues or patterns
@@ -66,13 +81,7 @@ KEY BEHAVIORS:
 SECURITY: All tools verify that the order belongs to the authenticated user. If a user tries to access someone else's order, they will get an authorization error.
 
 Be helpful and proactive - if you see delays, mention them.""",
-    tools=[
-        track_order,  # Verifies ownership
-        get_order_history,  # Full order details for authenticated user
-        get_my_order_history,  # Order summary for authenticated user
-        get_order_details,  # Specific order details (verifies ownership)
-        preload_memory_tool.PreloadMemoryTool(),
-    ],
+    tools=_order_tools,
     before_model_callback=log_system_instructions,  # DEBUG: Log system instruction with preloaded memories
     after_agent_callback=auto_save_to_memory,  # IMPLICIT (invocation context) ✅ Active
     generate_content_config=get_generate_content_config(),

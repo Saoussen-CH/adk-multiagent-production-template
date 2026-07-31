@@ -59,6 +59,8 @@ REQUIREMENTS = [
     # attribute 'mode'" — the extra alone let the remote build pick an
     # older, incompatible ADK version.
     "google-adk>=2.4.0",
+    # MCP client for the order agent's FedEx toolset (McpToolset imports mcp)
+    "mcp>=1.8,<2",
     "google-cloud-firestore>=2.16.0",
     "google-cloud-modelarmor>=0.1.0",
     "requests",
