@@ -112,6 +112,9 @@ if MODEL_ARMOR_CONFIG["enabled"] and MODEL_ARMOR_CONFIG["template_id"]:
 if os.getenv("MCP_FEDEX_URL"):
     ENV_VARS["MCP_FEDEX_URL"] = os.getenv("MCP_FEDEX_URL")
 
+# Propagate Model Armor ADK plugin enablement flag to Agent Engine runtime.
+ENV_VARS["MODEL_ARMOR_ADK_PLUGIN"] = os.getenv("MODEL_ARMOR_ADK_PLUGIN", "false")
+
 
 # =============================================================================
 # HELPERS
@@ -119,19 +122,25 @@ if os.getenv("MCP_FEDEX_URL"):
 
 
 def build_plugins() -> list:
-    """Build the ADK plugin list, conditionally including Model Armor."""
+    """Build the ADK plugin list, conditionally including Model Armor.
+
+    The backend (/api/chat) screens user prompts via Model Armor before they
+    reach the agent — but that only covers traffic that goes through the
+    backend. Direct engine queries (SDK, other agents) bypass it entirely.
+    Setting MODEL_ARMOR_ADK_PLUGIN=true adds engine-level screening to close
+    that gap (spec D3, docs/superpowers/specs/2026-07-17-v2-*.md).
+    """
     plugins = [LoggingPlugin()]
-    # NOTE: ModelArmorSafetyFilterPlugin is intentionally disabled for this deployment.
-    # The backend (/api/chat) already screens user prompts via Model Armor before
-    # they reach the agent, which is sufficient for this project.
-    # Uncomment to enable ADK-level screening (useful when the agent is exposed
-    # directly without a backend, or when tools fetch untrusted external content):
-    #
-    # if MODEL_ARMOR_CONFIG["enabled"] and MODEL_ARMOR_CONFIG["template_id"]:
-    #     from customer_support_mas.safety import ModelArmorSafetyFilterPlugin
-    #     plugins.append(
-    #         ModelArmorSafetyFilterPlugin(template_id=MODEL_ARMOR_CONFIG["template_id"])
-    #     )
+    if (
+        os.environ.get("MODEL_ARMOR_ADK_PLUGIN", "").lower() == "true"
+        and MODEL_ARMOR_CONFIG["enabled"]
+        and MODEL_ARMOR_CONFIG["template_id"]
+    ):
+        from customer_support_mas.safety import ModelArmorSafetyFilterPlugin
+
+        plugins.append(
+            ModelArmorSafetyFilterPlugin(template_id=MODEL_ARMOR_CONFIG["template_id"])
+        )
     return plugins
 
 
