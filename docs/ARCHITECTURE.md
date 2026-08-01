@@ -385,12 +385,12 @@ Step 1: Validate Order
    ↓ (if valid)
 Step 2: Check Eligibility
    ↓ (if eligible)
-Step 3: Process Refund
+Step 3: Submit for Approval (stages a PENDING_APPROVAL record — no money moves yet)
    ↓
-Success
+Awaiting human approval
 ```
 
-**Benefit:** Each step must pass before proceeding. This is the **only way** to process refunds, ensuring all refunds are properly validated.
+**Benefit:** Each step must pass before proceeding. This is the **only way** to submit a refund request, ensuring all requests are properly validated before a human approver can execute them.
 
 **Code:** `customer_support_mas/agents/refund/agent.py`
 

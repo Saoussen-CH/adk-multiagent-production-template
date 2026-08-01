@@ -276,8 +276,8 @@ Unit tests verify **single agent behavior** with **direct tool calls**. Each tes
 | Test ID | Prompt Sequence | Expected Tool Calls | Expected Response |
 |---------|-----------------|---------------------|-------------------|
 | `refund_conversational` | 1. "Refund ORD-67890" | 1. `check_if_refundable` | 1. Asks for reason |
-| | 2. "The headphones are defective" | 2. `validate_refund_request` → `check_refund_eligibility` → `process_refund` | 2. Refund approved |
-| `refund_with_reason` | "Refund ORD-67890, item is defective" | `check_if_refundable` → `validate` → `check` → `process` | Refund approved |
+| | 2. "The headphones are defective" | 2. `validate_refund_request` → `check_refund_eligibility` → `process_refund` | 2. Refund request submitted for approval |
+| `refund_with_reason` | "Refund ORD-67890, item is defective" | `check_if_refundable` → `validate` → `check` → `process` | Refund request submitted for approval |
 
 ### Full Refund Flow - Denied (Invalid Reason)
 

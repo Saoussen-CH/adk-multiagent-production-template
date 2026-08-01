@@ -9,7 +9,7 @@ from google.adk.agents import Agent, SequentialAgent
 # Import tools
 from customer_support_mas.agents.refund.tools import (
     check_refund_eligibility,  # Step 2: Dynamic eligibility check
-    process_refund,  # Step 3: Creates refund record
+    process_refund,  # Step 3: Stages refund request for approval
     validate_refund_request,  # Step 1: Validates ownership, delivery, items
 )
 
@@ -40,7 +40,7 @@ refund_config = get_agent_config("refund_processor")
 refund_processor = Agent(
     name=refund_config["name"],
     model=get_model_with_retry("refund_processor"),
-    description="Processes the refund after validation and eligibility checks pass",
+    description="Submits the refund request for approval after validation and eligibility checks pass",
     instruction=refund_config["instruction"],
     tools=[process_refund],
     generate_content_config=get_generate_content_config(),
@@ -53,7 +53,7 @@ sequential_refund_workflow = SequentialAgent(
 WORKFLOW STEPS:
 1. Validate Request - Verify ownership, delivery status, and items exist in order
 2. Check Eligibility - Dynamic check: 30-day return window, items not already refunded
-3. Process Refund - Create refund record with item tracking to prevent duplicates
+3. Submit for Approval - Stage a pending record for human review; prevents duplicate submissions
 
 SECURITY:
 - Each step verifies the user owns the order (defense in depth)

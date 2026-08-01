@@ -247,7 +247,7 @@ The refund system includes comprehensive validation and tracking:
 |------|------|-----------|
 | 1 | `validate_refund_request()` | Ownership, delivery status, items exist in order |
 | 2 | `check_refund_eligibility()` | 30-day return window, items not already refunded |
-| 3 | `process_refund()` | Creates refund record with item tracking |
+| 3 | `process_refund()` | Stages a `PENDING_APPROVAL` refund request (in `refund_requests`) for human review — never writes `refunds` directly |
 
 ### Features
 
@@ -285,11 +285,40 @@ The refund system includes comprehensive validation and tracking:
 
 **Policy**: Refunds are granted for product-related issues only. Reasons like "I changed my mind" or "found it cheaper elsewhere" are not valid grounds for a refund.
 
-### Example Refund Record
+### Refund Collections
+
+Two Firestore collections are involved now that refunds go through human
+approval (see `backend/app/refund_approvals.py`):
+
+- **`refund_requests`** — written by `process_refund()`. Holds the
+  `PENDING_APPROVAL` staging record until a human approver acts on it.
+- **`refunds`** — written only by the approval step (`approve_refund()`),
+  after dual-control and idempotency checks pass. The agent-facing tools
+  never write here directly.
+
+### Example Refund Request Record (`refund_requests`, staged by the agent)
 
 ```json
 {
-  "refund_id": "REF-12345-01",
+  "order_id": "ORD-12345",
+  "user_id": "demo-user-001",
+  "items": [
+    {"product_id": "PROD-001", "name": "Pro Laptop", "qty": 1, "price": 1199.99}
+  ],
+  "refund_amount": 1199.99,
+  "reason": "Defective screen",
+  "reason_category": "quality_issue",
+  "status": "PENDING_APPROVAL",
+  "requested_at": "2026-01-15T10:30:00+00:00",
+  "expires_at": "2026-01-18T10:30:00+00:00"
+}
+```
+
+### Example Refund Record (`refunds`, written after human approval)
+
+```json
+{
+  "refund_id": "REF-12345-a1b2c3d4",
   "order_id": "ORD-12345",
   "customer_id": "demo-user-001",
   "status": "pending",
@@ -298,7 +327,7 @@ The refund system includes comprehensive validation and tracking:
   ],
   "total_refund_amount": 1199.99,
   "reason": "Defective screen",
-  "created_at": "2025-01-15T10:30:00"
+  "created_at": "2026-01-15T10:30:00"
 }
 ```
 
