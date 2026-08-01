@@ -6,24 +6,39 @@ graph TB
         User[👤 User]
     end
 
-    subgraph "Vertex AI Agent Engine Runtime"
+    subgraph "Cloud Run Backend"
+        Backend[⚙️ FastAPI Proxy<br/>Retry/backoff + circuit breaker<br/>Model Armor prompt/response screening]
+    end
+
+    subgraph "Vertex AI Agent Engine Runtime (Agent Identity)"
         subgraph "Root Coordinator"
             RootAgent[🤖 Root Agent<br/>Model: Gemini 2.5 Pro<br/>Error Handling: Always Respond<br/>Callback: auto_save_to_memory]
         end
 
         subgraph "Specialist Agents"
             ProductAgent[🛍️ Product Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>+ get_product_info default<br/>Callback: auto_save_to_memory]
-            OrderAgent[📦 Order Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>Callback: auto_save_to_memory]
+            OrderAgent[📦 Order Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>+ track_shipment — MCP, env-gated<br/>Callback: auto_save_to_memory]
             BillingAgent[💳 Billing Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>Note: Refunds via workflow only<br/>Callback: auto_save_to_memory]
         end
 
         subgraph "Workflow Patterns"
-            RefundWorkflow[🔄 Sequential Workflow<br/>Model: Gemini 2.5 Pro<br/>3-Step Validation Process<br/>ONLY way to process refunds]
+            RefundWorkflow[🔄 Sequential Workflow<br/>Model: Gemini 2.5 Pro<br/>3-Step: validate → eligibility → stage<br/>Only ever STAGES — never executes]
         end
 
         subgraph "Memory Management"
             Tracking[📊 Memory Callbacks<br/>auto_save_to_memory: Save session<br/>Creates VertexAiMemoryBankService<br/>Automatic extraction & persistence]
         end
+    end
+
+    subgraph "Governed External Egress"
+        Gateway[🔒 Agent Gateway<br/>Agent-to-Anywhere egress<br/>IAP tool-level authorization<br/>60 internal API hostnames registered]
+        FedExMCP[FedEx Tracking MCP<br/>Cloud Run, invoker SA impersonation]
+    end
+
+    subgraph "Human-in-the-Loop Approval"
+        Approver[🧑‍💼 Approver Admin UI + API<br/>dual control: requester ≠ approver]
+        RefundRequests[(refund_requests<br/>PENDING_APPROVAL staging)]
+        RefundsDB[(refunds<br/>written only after approval)]
     end
 
     subgraph "Memory Bank"
@@ -32,19 +47,26 @@ graph TB
     end
 
     subgraph "Google Cloud Services"
-        Firestore[(🔥 Firestore<br/>Products, Orders, Sessions<br/>Vector Search)]
+        Firestore[(🔥 Firestore<br/>Products, Orders, Sessions<br/>refund_policy — versioned config<br/>Vector Search)]
         CloudStorage[☁️ Cloud Storage<br/>Agent Staging]
     end
 
-    User -->|Query| RootAgent
+    User -->|Query| Backend
+    Backend -->|Query| RootAgent
     RootAgent -->|Route| ProductAgent
     RootAgent -->|Route| OrderAgent
     RootAgent -->|Route| BillingAgent
-    RootAgent -->|Route| RefundWorkflow
+    RootAgent -->|Route + reason_code| RefundWorkflow
 
     ProductAgent -->|RAG Search| Firestore
     OrderAgent -->|Fetch Orders| Firestore
+    OrderAgent -.->|if MCP_FEDEX_URL set| Gateway
+    Gateway --> FedExMCP
     BillingAgent -->|Fetch Invoices| Firestore
+
+    RefundWorkflow -->|Stage PENDING_APPROVAL| RefundRequests
+    RefundRequests --> Approver
+    Approver -->|Approve, dual-control checked| RefundsDB
 
     RootAgent -.->|Save Session| MemoryService
     ProductAgent -.->|Save Session| MemoryService
@@ -55,12 +77,18 @@ graph TB
     ProductAgent -->|Load Memories| MemoryStore
 
     style User fill:#4285F4,stroke:#1967D2,color:#fff
+    style Backend fill:#4285F4,stroke:#1967D2,color:#fff
     style RootAgent fill:#34A853,stroke:#0D652D,color:#fff
     style ProductAgent fill:#FBBC04,stroke:#F29900,color:#000
     style OrderAgent fill:#FBBC04,stroke:#F29900,color:#000
     style BillingAgent fill:#FBBC04,stroke:#F29900,color:#000
     style RefundWorkflow fill:#EA4335,stroke:#C5221F,color:#fff
     style Tracking fill:#34A853,stroke:#0D652D,color:#fff
+    style Gateway fill:#EA4335,stroke:#C5221F,color:#fff
+    style FedExMCP fill:#4285F4,stroke:#1967D2,color:#fff
+    style Approver fill:#EA4335,stroke:#C5221F,color:#fff
+    style RefundRequests fill:#FF6F00,stroke:#E65100,color:#fff
+    style RefundsDB fill:#FF6F00,stroke:#E65100,color:#fff
     style MemoryService fill:#9334E6,stroke:#7627BB,color:#fff
     style MemoryStore fill:#9334E6,stroke:#7627BB,color:#fff
     style Firestore fill:#FF6F00,stroke:#E65100,color:#fff

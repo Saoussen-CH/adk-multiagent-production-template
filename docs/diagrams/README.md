@@ -16,6 +16,11 @@ Mermaid diagrams for the Multi-Agent Customer Support System.
 - Complete system architecture
 - Shows all agents, services, and data flows
 - Includes Vertex AI Agent Engine, Memory Bank, and Firestore
+- Cloud Run FastAPI backend (Model Armor screening, circuit breaker) fronting the Agent Engine
+- Governed external egress: Agent Gateway (IAP tool-level authorization) → FedEx Tracking MCP
+- Refund human-in-the-loop: the Sequential Workflow only ever *stages* a request
+  (`refund_requests`); a human approver (dual control) must approve before
+  deterministic code writes `refunds`
 
 ### Agent Hierarchy
 **File:** `agent-hierarchy.mmd`
@@ -37,6 +42,8 @@ Mermaid diagrams for the Multi-Agent Customer Support System.
 
 **Order Agent** - `order-agent.mmd`
 - 5 tools (PreloadMemoryTool + track_order + get_my_order_history + get_order_history + get_order_details)
+  + `track_shipment` (FedEx MCP, env-gated on `MCP_FEDEX_URL` — absent by
+  default, egress governed by Agent Gateway)
 - Authenticated user context — all tools verify ownership
 - Firestore integration
 

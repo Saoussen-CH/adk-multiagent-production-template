@@ -3,6 +3,36 @@
 ## Summary
 All Mermaid architecture diagrams have been updated to accurately reflect the current codebase implementation.
 
+## Changes Made (Aug 2, 2026)
+
+Diagrams had drifted since the Dec 3, 2025 audit below — none of it reflected
+the FedEx MCP integration, Agent Gateway egress governance, or the refund
+human-in-the-loop redesign, all already live in the code.
+
+**Files Updated:**
+1. `order-agent.mmd` — added `track_shipment` (env-gated FedEx MCP tool)
+   and the governed-egress path (Agent Gateway → FedEx Tracking MCP).
+2. `system-overview.mmd` — added the Cloud Run FastAPI backend (Model
+   Armor screening), Agent Gateway egress, and the full HITL approval
+   chain (`refund_requests` staging → approver → `refunds`). Refund
+   workflow box corrected from "ONLY way to process refunds" to "Only
+   ever STAGES — never executes."
+3. `root-agent.mmd` — refund routing edge relabeled from "reason" to
+   "reason_code" (fixed policy code, not free text); added the human
+   approval step downstream of the refund workflow.
+4. `README.md` — Order Agent tool list now mentions `track_shipment`;
+   System Overview bullets mention the backend, Agent Gateway, and HITL
+   approval flow.
+
+All three edited `.mmd` files verified to render with `mmdc` (mermaid-cli)
+before committing — one real syntax error (parentheses inside a `[...]`
+node label, not valid Mermaid node-text syntax) was caught and fixed this
+way, not just eyeballed.
+
+`billing-agent.mmd`, `product-agent.mmd`, `agent-hierarchy.mmd`, and
+`cicd-pipeline.mmd` were checked and are still accurate — the tools/stages
+they describe didn't change.
+
 ## Changes Made (Dec 3, 2025)
 
 ### ✅ Simplified Diagrams - Removed Technical Details

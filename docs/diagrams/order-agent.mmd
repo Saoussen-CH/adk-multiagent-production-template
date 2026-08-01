@@ -12,6 +12,7 @@ graph TB
         T2[get_my_order_history<br/>Order summary for authenticated user]
         T3[get_order_history<br/>Full order details for authenticated user]
         T4[get_order_details<br/>Complete details for specific order]
+        T5[track_shipment<br/>MCP tool — env-gated on<br/>MCP_FEDEX_URL, absent by default]
     end
 
     subgraph "Data Sources"
@@ -19,17 +20,27 @@ graph TB
         Memory[(Memory Bank)]
     end
 
+    subgraph "Governed External Egress"
+        Gateway[🔒 Agent Gateway<br/>Agent-to-Anywhere egress<br/>IAP tool-level authorization]
+        FedExMCP[FedEx Tracking MCP<br/>Cloud Run, --no-allow-unauthenticated<br/>invoker SA impersonation]
+        FedExAPI[FedEx Track API<br/>mock mode by default]
+    end
+
     Agent --> T0
     Agent --> T1
     Agent --> T2
     Agent --> T3
     Agent --> T4
+    Agent -.->|if MCP_FEDEX_URL set| T5
 
     T0 --> Memory
     T1 --> Firestore
     T2 --> Firestore
     T3 --> Firestore
     T4 --> Firestore
+    T5 --> Gateway
+    Gateway --> FedExMCP
+    FedExMCP --> FedExAPI
 
     style Agent fill:#FBBC04,stroke:#F29900,color:#000,stroke-width:3px
     style T0 fill:#9334E6,stroke:#7627BB,color:#fff
@@ -37,5 +48,9 @@ graph TB
     style T2 fill:#4285F4,stroke:#1967D2,color:#fff
     style T3 fill:#4285F4,stroke:#1967D2,color:#fff
     style T4 fill:#4285F4,stroke:#1967D2,color:#fff
+    style T5 fill:#4285F4,stroke:#1967D2,color:#fff,stroke-dasharray: 5 5
     style Firestore fill:#FF6F00,stroke:#E65100,color:#fff
     style Memory fill:#9334E6,stroke:#7627BB,color:#fff
+    style Gateway fill:#EA4335,stroke:#C5221F,color:#fff
+    style FedExMCP fill:#4285F4,stroke:#1967D2,color:#fff
+    style FedExAPI fill:#9AA0A6,stroke:#5F6368,color:#fff
