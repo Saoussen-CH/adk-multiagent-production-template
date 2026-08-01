@@ -42,11 +42,7 @@ _fedex_toolset = build_fedex_toolset()
 if _fedex_toolset is not None:
     _order_tools.append(_fedex_toolset)
 
-order_agent = Agent(
-    name=order_config["name"],
-    model=get_model_with_retry("order_agent"),
-    description=order_config["description"],
-    instruction="""You help customers track orders and view order history.
+_order_instruction = """You help customers track orders and view order history.
 
 AUTHENTICATED USER BEHAVIOR:
 - The user is already logged in - their identity is automatically available
@@ -57,15 +53,25 @@ AVAILABLE TOOLS:
 - get_my_order_history(): Quick summary of all orders (ID, date, total, status)
 - get_order_history(): Full details of all orders including items and shipping
 - get_order_details(order_id): Complete details for a specific order
-- track_order(order_id): Tracking info for a specific order (carrier, timeline)
-- track_shipment(tracking_number): LIVE carrier tracking via FedEx — use when the user asks for real-time courier status and track_order() shows a FedEx tracking number. Pass that tracking number.
+- track_order(order_id): Tracking info for a specific order (carrier, timeline)"""
+
+if _fedex_toolset is not None:
+    _order_instruction += """
+- track_shipment(tracking_number): LIVE carrier tracking via FedEx — use when the user asks for real-time courier status and track_order() shows a FedEx tracking number. Pass that tracking number."""
+
+_order_instruction += """
 
 TOOL SELECTION:
 - "show my orders" / "order history" → get_my_order_history() for quick summary
 - "full details of my orders" / "what did I order?" → get_order_history() for items
 - "details for ORD-12345" → get_order_details(order_id)
-- "track ORD-12345" / "where is my order?" → track_order(order_id)
-- "where is it right now?" / live courier status → track_order(order_id) first to get the tracking number, then track_shipment(tracking_number)
+- "track ORD-12345" / "where is my order?" → track_order(order_id)"""
+
+if _fedex_toolset is not None:
+    _order_instruction += """
+- "where is it right now?" / live courier status → track_order(order_id) first to get the tracking number, then track_shipment(tracking_number)"""
+
+_order_instruction += """
 
 MEMORY-AWARE BEHAVIOR:
 - Check preloaded memories for recurring delivery issues or patterns
@@ -80,7 +86,13 @@ KEY BEHAVIORS:
 
 SECURITY: All tools verify that the order belongs to the authenticated user. If a user tries to access someone else's order, they will get an authorization error.
 
-Be helpful and proactive - if you see delays, mention them.""",
+Be helpful and proactive - if you see delays, mention them."""
+
+order_agent = Agent(
+    name=order_config["name"],
+    model=get_model_with_retry("order_agent"),
+    description=order_config["description"],
+    instruction=_order_instruction,
     tools=_order_tools,
     before_model_callback=log_system_instructions,  # DEBUG: Log system instruction with preloaded memories
     after_agent_callback=auto_save_to_memory,  # IMPLICIT (invocation context) ✅ Active

@@ -30,3 +30,14 @@ def test_order_agent_tools_unchanged_by_default(monkeypatch):
         for t in order_agent_module.order_agent.tools
     ]
     assert not any("Mcp" in type(t).__name__ for t in order_agent_module.order_agent.tools), tool_names
+    # The system prompt must not advertise a tool that isn't actually
+    # attached — otherwise the model can narrate fabricated live-tracking
+    # info it has no function-declaration backing for.
+    assert "track_shipment" not in order_agent_module.order_agent.instruction
+
+
+def test_order_agent_instruction_mentions_track_shipment_when_set(monkeypatch):
+    monkeypatch.setenv("MCP_FEDEX_URL", "https://fedex-mcp.example.run.app/mcp")
+    from customer_support_mas.agents.order import agent as order_agent_module
+    importlib.reload(order_agent_module)
+    assert "track_shipment" in order_agent_module.order_agent.instruction
