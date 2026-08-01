@@ -14,14 +14,50 @@
 #     servers" pages that were not mirrored locally), so both registrations
 #     below reuse this one documented command shape.
 #
-# Known discrepancy: on this machine, `gcloud iap web add-iam-policy-binding --help`
-# only accepts --resource-type=app-engine|backend-services (no `agent-registry`
-# choice, no `--endpoint` flag) — the installed SDK (482.0.0) predates this
-# Preview resource type entirely (latest available is 578.0.0; the "gcloud
-# Preview Commands" component isn't installed either). This is NOT the same
-# class of bug as the two confirmed-wrong doc claims (trust domain, bool env
-# var) — it could not be verified either way here. Script follows refs as
-# written. See docs/MCP_FEDEX.md "Known Preview caveats".
+# UPDATED after upgrading to SDK 578.0.0 (was 482.0.0) and running this LIVE
+# against a real project (workshop-494016). Three real findings, confirmed
+# live, not from docs:
+#
+#   1. `--interfaces` shorthand is `protocolBinding=X,url=Y` (no brackets, no
+#      quotes) or proper JSON `'[{"protocolBinding": "X", "url": "Y"}]'` — the
+#      original script used neither. Fixed to shorthand form.
+#
+#   2. `--agent-spec-type=no-spec` / `--mcp-server-spec-type=no-spec` create a
+#      raw Service entry that is NEVER projected into a discoverable
+#      Agent/McpServer resource — confirmed by `gcloud agent-registry
+#      mcp-servers describe <service-id>` and `agents describe <service-id>`
+#      both returning NOT_FOUND immediately (not a propagation delay: polled
+#      8x over ~2.5min, identical error every time). `gcloud iap web
+#      add-iam-policy-binding --mcp-server=<service-id>` fails the same way,
+#      because that flag also resolves against the *projected* resource, not
+#      the raw Service. Providing real spec content (`--mcp-server-spec-type=
+#      tool-spec --mcp-server-spec-content=<tools/list-shaped JSON>`) DOES
+#      project a resource — but at a system-generated ID
+#      (`agentregistry-00000000-...`), never the Service ID you chose. The
+#      real ID only appears in the `registryResource:` field of the
+#      create/update response.
+#
+#      This script therefore registers the MCP server with real tool-spec
+#      content (we know its schema — one tool, `track_shipment`) and captures
+#      the generated `registryResource` ID for the IAM binding.
+#
+#      The order agent has NO equivalent fix available in Phase 1: it isn't an
+#      A2A agent, so there's no real `--agent-spec-content` (an A2A agent
+#      card) to provide, and `no-spec` is the only option — meaning it stays
+#      unprojected and undiscoverable as an `Agent` resource. This does NOT
+#      block the egress authorization below (the IAM binding's `--member` is
+#      the order agent's SPIFFE principal string, addressed directly, not via
+#      an Agent Registry resource ID) — but it does mean the order agent won't
+#      show up in registry-based agent discovery/listing until it's migrated
+#      to A2A (spec Phase 2). This is a genuine, live-confirmed argument for
+#      why that migration matters, not just an architectural preference.
+#
+#   3. `gcloud iap web add-iam-policy-binding --resource-type=agent-registry`
+#      DOES exist on 578.0.0 (confirmed live) — the previous "could not
+#      verify" caveat is resolved. `iap.googleapis.com` must be explicitly
+#      enabled (added to ops/setup_agent_gateway.sh's API list) — it is not
+#      implied by the other Agent Gateway APIs and its absence produces a
+#      confusing SERVICE_DISABLED error at binding time, not at setup time.
 #
 # Usage: bash ops/register_agent_registry.sh [env-file]
 set -euo pipefail
@@ -49,54 +85,70 @@ PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectN
 
 # ------------------------------------------------------------------------------
 # 1. Register the Agent Engine (order agent) as an Agent Registry service entry.
-# Command shape: refs/scale/Route Agent Runtime traffic through Agent Gateway.md,
-# step 3.
+# no-spec is the only option available (not an A2A agent yet) — this entry
+# stays unprojected/undiscoverable as an `Agent` resource (finding #2 above).
+# Registered anyway for basic listing/audit visibility in the console.
 # ------------------------------------------------------------------------------
 echo "Registering the Agent Engine with Agent Registry..."
-AGENT_ENDPOINT_ID=$(gcloud agent-registry services create "customer-support-order-agent" \
-  --project="$PROJECT_ID" \
-  --location="$REGION" \
-  --display-name="Customer Support Order Agent (Agent Engine)" \
-  --endpoint-spec-type=no-spec \
-  --interfaces="[{url=\"https://${REGION}-aiplatform.googleapis.com\",protocolBinding=\"jsonrpc\"}]" \
-  --format="value(registryResource)")
-echo "Registered agent endpoint: ${AGENT_ENDPOINT_ID}"
+if ! gcloud agent-registry services describe "customer-support-order-agent" --project="$PROJECT_ID" --location="$REGION" >/dev/null 2>&1; then
+  gcloud agent-registry services create "customer-support-order-agent" \
+    --project="$PROJECT_ID" \
+    --location="$REGION" \
+    --display-name="Customer Support Order Agent (Agent Engine)" \
+    --agent-spec-type=no-spec \
+    --interfaces="protocolBinding=jsonrpc,url=https://${REGION}-aiplatform.googleapis.com"
+else
+  echo "  Already registered, skipping create."
+fi
+echo "Registered agent service: customer-support-order-agent (no-spec — not projected as a discoverable Agent resource, see finding #2)"
 
 # ------------------------------------------------------------------------------
 # 2. Register the fedex-tracking-mcp Cloud Run service as an Agent Registry
-# service entry. Same command shape as step 1, pointed at the deployed MCP URL.
-# protocolBinding="jsonrpc" matches the actual wire protocol (MCP over
-# streamable HTTP is JSON-RPC 2.0 — confirmed against the deployed server's own
-# `initialize` response during Task 3's smoke test).
+# service entry — WITH real tool-spec content, not no-spec (finding #2). This
+# is what actually projects a discoverable McpServer resource, which is what
+# the IAM binding in step 3 needs to reference. Tool schema matches
+# mcp_servers/fedex_tracking/server.py's track_shipment tool exactly.
 # ------------------------------------------------------------------------------
-echo "Registering fedex-tracking-mcp with Agent Registry..."
-MCP_ENDPOINT_ID=$(gcloud agent-registry services create "fedex-tracking-mcp" \
-  --project="$PROJECT_ID" \
-  --location="$REGION" \
-  --display-name="FedEx Tracking MCP Server" \
-  --endpoint-spec-type=no-spec \
-  --interfaces="[{url=\"${MCP_FEDEX_URL}\",protocolBinding=\"jsonrpc\"}]" \
-  --format="value(registryResource)")
-echo "Registered MCP endpoint: ${MCP_ENDPOINT_ID}"
+echo "Registering fedex-tracking-mcp with Agent Registry (tool-spec)..."
+TOOLS_JSON='{"tools":[{"name":"track_shipment","description":"Get live FedEx tracking status for a shipment.","inputSchema":{"type":"object","properties":{"tracking_number":{"type":"string","description":"The FedEx tracking number"}},"required":["tracking_number"]}}]}'
+if gcloud agent-registry services describe "fedex-tracking-mcp" --project="$PROJECT_ID" --location="$REGION" >/dev/null 2>&1; then
+  UPDATE_OUTPUT=$(gcloud agent-registry services update "fedex-tracking-mcp" \
+    --project="$PROJECT_ID" \
+    --location="$REGION" \
+    --mcp-server-spec-type=tool-spec \
+    --mcp-server-spec-content="$TOOLS_JSON" \
+    --format="value(registryResource)")
+else
+  UPDATE_OUTPUT=$(gcloud agent-registry services create "fedex-tracking-mcp" \
+    --project="$PROJECT_ID" \
+    --location="$REGION" \
+    --display-name="FedEx Tracking MCP Server" \
+    --interfaces="protocolBinding=jsonrpc,url=${MCP_FEDEX_URL}" \
+    --mcp-server-spec-type=tool-spec \
+    --mcp-server-spec-content="$TOOLS_JSON" \
+    --format="value(registryResource)")
+fi
+# registryResource is a full path: projects/.../locations/.../mcpServers/<generated-id>
+# — extract just the trailing ID for the IAM binding's --mcp-server flag.
+MCP_PROJECTED_ID=$(basename "$UPDATE_OUTPUT")
+echo "Registered MCP server: fedex-tracking-mcp (projected as ${MCP_PROJECTED_ID})"
 
 # ------------------------------------------------------------------------------
-# 3. Grant the agent identity principal roles/iap.egressor on the MCP endpoint.
-# Agent Gateway default-denies all egress until this binding exists (refs/Govern/
-# Agent Gateway/Set up Agent Gateway.md, "Set up agent identity and permissions").
-# Command: refs/scale/Route Agent Runtime traffic through Agent Gateway.md, step 4.
+# 3. Grant the agent identity principal roles/iap.egressor on the MCP server's
+# PROJECTED resource ID (not the Service ID we chose — finding #2). Agent
+# Gateway default-denies all egress until this binding exists.
 # MEMBER format (principal://TRUST_DOMAIN/resources/aiplatform/ENGINE_RESOURCE)
-# is from that same step. Trust domain is agents.global.proj-PROJECT_NUMBER...,
-# NOT agents.global.project-PROJECT_NUMBER... as Google's docs claim elsewhere —
-# this is one of the two confirmed-wrong doc bugs in this repo (see
-# terraform/modules/core/iam.tf and CLAUDE.md); applied here for consistency
-# even though this specific refs doc doesn't spell out "proj-" vs "project-"
-# itself.
+# — trust domain is agents.global.proj-PROJECT_NUMBER..., NOT
+# agents.global.project-PROJECT_NUMBER... as Google's docs claim elsewhere —
+# one of the two confirmed-wrong doc bugs in this repo (see
+# terraform/modules/core/iam.tf and CLAUDE.md).
+# `iap.googleapis.com` must be enabled — done in ops/setup_agent_gateway.sh.
 # ------------------------------------------------------------------------------
 MEMBER="principal://agents.global.proj-${PROJECT_NUMBER}.system.id.goog/resources/aiplatform/${ENGINE_RESOURCE}"
-echo "Granting roles/iap.egressor to ${MEMBER} on ${MCP_ENDPOINT_ID}..."
+echo "Granting roles/iap.egressor to ${MEMBER} on ${MCP_PROJECTED_ID}..."
 gcloud iap web add-iam-policy-binding \
   --resource-type=agent-registry \
-  --endpoint="$MCP_ENDPOINT_ID" \
+  --mcp-server="$MCP_PROJECTED_ID" \
   --region="$REGION" \
   --project="$PROJECT_ID" \
   --member="$MEMBER" \
@@ -116,6 +168,20 @@ gcloud agent-registry services describe "fedex-tracking-mcp" \
 gcloud agent-registry services describe "customer-support-order-agent" \
   --project="$PROJECT_ID" \
   --location="$REGION"
+
+echo ""
+echo "Verifying the MCP server actually projected (expect tools: [track_shipment], not NOT_FOUND)..."
+gcloud agent-registry mcp-servers describe "$MCP_PROJECTED_ID" \
+  --project="$PROJECT_ID" \
+  --location="$REGION"
+
+echo ""
+echo "Verifying the IAP egressor binding..."
+gcloud iap web get-iam-policy \
+  --resource-type=agent-registry \
+  --mcp-server="$MCP_PROJECTED_ID" \
+  --region="$REGION" \
+  --project="$PROJECT_ID"
 
 echo ""
 echo "Done. The gateway is deployed in audit-only (dry-run IAP) mode by default"

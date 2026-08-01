@@ -178,8 +178,16 @@ fallback clause says to use Secret Manager until it proves stable.
 ## 6. Known Preview caveats
 
 Everything in this document touches Preview-stage `gcloud`/REST surfaces.
-Two are **confirmed wrong** by live testing against a real deployed engine in
-this repo (not just "unverifiable" — actually contradicted by observed
+`ops/setup_agent_gateway.sh` and `ops/register_agent_registry.sh` have both
+been run live end-to-end against a real project (workshop-494016), on gcloud
+578.0.0 — the Agent Gateway, its IAP authz extension/policy, the engine
+attachment, the MCP server's Agent Registry entry, and the IAP egressor
+binding were all created and independently verified (`describe`/`get-iam-policy`
+after the fact, not just trusting a 0 exit code). Findings below reflect that
+run, not doc reading.
+
+Three are **confirmed wrong** by live testing against a real deployed engine
+in this repo (not just "unverifiable" — actually contradicted by observed
 behavior):
 
 - **Trust domain**: Google's docs write the SPIFFE trust domain as
@@ -195,28 +203,38 @@ behavior):
   a bool. Not directly exercised by this task's scripts, but it's the same
   Agent Identity path these scripts attach traffic to, so it applies to any
   Agent Engine these scripts govern.
+- **`--mcp-server-spec-type=no-spec` / `--agent-spec-type=no-spec` never
+  project a discoverable resource.** `gcloud agent-registry services create
+  ... --mcp-server-spec-type=no-spec` succeeds and creates a raw "Service"
+  entry, but `gcloud agent-registry mcp-servers describe <same-id>` returns
+  `NOT_FOUND` — confirmed not a propagation delay (polled 8x over ~2.5min,
+  identical error every time). `gcloud iap web add-iam-policy-binding
+  --mcp-server=<same-id>` fails the same way, because that flag resolves
+  against the *projected* resource, not the raw Service. Providing real spec
+  content (`--mcp-server-spec-type=tool-spec --mcp-server-spec-content=<tools/
+  list-shaped JSON>`) does project a resource — but at a **system-generated
+  ID** (`agentregistry-00000000-...`), never the Service ID you chose; the
+  real ID only appears in the `registryResource:` field of the create/update
+  response. `ops/register_agent_registry.sh` registers the MCP server with
+  real tool-spec content and captures that generated ID for the IAM binding.
+  The order agent has no equivalent fix in Phase 1 — it isn't an A2A agent,
+  so there's no real agent-card content to provide, `no-spec` is the only
+  option, and it stays unprojected/undiscoverable as an `Agent` resource.
+  This doesn't block the egress binding itself (the binding's `--member` is
+  the order agent's SPIFFE principal string, addressed directly, not via a
+  registry resource ID) — it only affects registry-based *discovery* of the
+  order agent by other agents/tooling. Live confirmation that A2A migration
+  (spec Phase 2) is what actually unlocks full registry discoverability, not
+  just an architectural nicety.
 
-A third item found in this task is a **gap, not a confirmed bug** — it could
-not be checked either way because the installed tooling doesn't cover it yet:
-
-- This machine's `gcloud` is version 482.0.0 (latest available: 578.0.0; the
-  "gcloud Preview Commands" component is not installed). `gcloud network-services
-  agent-gateways --help`, `gcloud agent-registry --help`,
-  `gcloud beta service-extensions authz-extensions --help`, and
-  `gcloud beta network-security authz-policies --help` all return
-  `Invalid choice` — these command groups don't exist in this SDK build at
-  all, so their exact flag syntax could not be cross-checked against
-  `--help` and was taken verbatim from the refs docs.
-- `gcloud iap web add-iam-policy-binding --help` **does** exist on this
-  machine, and its `--resource-type` only accepts `app-engine` or
-  `backend-services` — no `agent-registry` choice, and no `--endpoint` flag
-  at all. `ops/register_agent_registry.sh` still uses
-  `--resource-type=agent-registry --endpoint=...` exactly as shown in
-  `refs/scale/Route Agent Runtime traffic through Agent Gateway.md`, since
-  that's the only source of truth available and the absence looks like an
-  SDK-version gap (Preview feature not yet rolled into this build) rather
-  than the refs doc being wrong. Re-verify with a current SDK
-  (`gcloud components update`) before relying on this in a real project.
+One item originally in this section — `gcloud iap web add-iam-policy-binding`
+not supporting `--resource-type=agent-registry` — turned out to be a genuine
+SDK-version gap, not a doc bug: it appeared on 482.0.0 but is present and
+correct on 578.0.0, confirmed by the live run above. `iap.googleapis.com`
+does need to be explicitly enabled, though (added to
+`ops/setup_agent_gateway.sh`'s API list) — it's not implied by the other
+Agent Gateway APIs, and its absence produces a confusing `SERVICE_DISABLED`
+error at binding time rather than at setup time.
 
 By decision, Agent Gateway and Agent Registry setup stay `gcloud`/REST
 scripts (`ops/setup_agent_gateway.sh`, `ops/register_agent_registry.sh`), not

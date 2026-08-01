@@ -48,6 +48,8 @@ trap 'rm -rf "$WORKDIR"' EXIT
 # List copied from refs/Govern/Agent Gateway/Set up Agent Gateway.md, "Required APIs".
 # ------------------------------------------------------------------------------
 echo "Enabling required APIs for Agent Gateway..."
+# Split into two calls: `gcloud services enable` rejects batches > 20
+# (confirmed live: SU_MAX_BATCH_SIZE_EXCEEDED at 21).
 gcloud services enable \
   compute.googleapis.com \
   networksecurity.googleapis.com \
@@ -68,6 +70,9 @@ gcloud services enable \
   apptopology.googleapis.com \
   cloudapiregistry.googleapis.com \
   notebooks.googleapis.com \
+  iap.googleapis.com \
+  --project="$PROJECT_ID"
+gcloud services enable \
   texttospeech.googleapis.com \
   dataform.googleapis.com \
   --project="$PROJECT_ID"
@@ -181,10 +186,12 @@ gcloud network-services agent-gateways describe "$GATEWAY_NAME" \
 
 echo ""
 echo "Verifying engine attachment (expect agentToAnywhereConfig.agentGateway, not null)..."
+# python3 instead of jq: jq is not guaranteed to be installed (confirmed
+# missing on this machine); python3 is a hard dependency of this repo already.
 curl -s -X GET \
   -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   "https://${REGION}-aiplatform.googleapis.com/v1beta1/${ENGINE_RESOURCE}" \
-  | jq '.spec.deploymentSpec.agentGatewayConfig'
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get('spec',{}).get('deploymentSpec',{}).get('agentGatewayConfig'), indent=2))"
 
 echo ""
 echo "Gateway is in default-deny egress mode: nothing can be reached until it is"
