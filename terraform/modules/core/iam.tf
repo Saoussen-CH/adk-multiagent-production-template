@@ -192,3 +192,38 @@ resource "google_project_iam_member" "model_armor_vertex" {
 
   depends_on = [google_project_service.apis]
 }
+
+# ------------------------------------------------------------------------------
+# FedEx MCP Cloud Run invoker SA — bridges Agent Identity to Cloud Run IAM auth.
+#
+# Cloud Run's --no-allow-unauthenticated invoker check is a separate, older
+# OIDC verification path from Agent Identity's SPIFFE/mTLS trust domain — the
+# two don't interoperate directly. Confirmed live: an ID token minted straight
+# from an AGENT_IDENTITY engine's ADC gets a 401 "could not be verified" from
+# Cloud Run, not a clean 403. Google's own reference implementation
+# (cloudnet-agent-gateway codelab, demos/agent-gateway/src/mortgage-agent/
+# deploy_agent.py) bridges the two trust domains with a dedicated invoker SA:
+# the agent's Agent Identity is only ever granted permission to IMPERSONATE
+# this SA (serviceAccountTokenCreator); the SA itself — a normal IAM
+# principal Cloud Run already understands — holds roles/run.invoker on the
+# MCP Cloud Run service (granted out-of-band by deployment/deploy-mcp-fedex.sh
+# after each deploy, since the Cloud Run service isn't Terraform-managed).
+# See docs/MCP_FEDEX.md section 7 for the full design and open items.
+# ------------------------------------------------------------------------------
+resource "google_service_account" "fedex_mcp_invoker" {
+  project      = var.project_id
+  account_id   = "fedex-mcp-invoker"
+  display_name = "FedEx MCP Cloud Run invoker (impersonated by order agent's Agent Identity)"
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_service_account_iam_member" "agent_identity_impersonates_fedex_invoker" {
+  for_each = var.google_managed_sas_exist ? toset(["roles/iam.serviceAccountTokenCreator"]) : toset([])
+
+  service_account_id = google_service_account.fedex_mcp_invoker.name
+  role               = each.key
+  member             = "principalSet://agents.global.proj-${local.project_number}.system.id.goog/attribute.platformContainer/aiplatform/projects/${local.project_number}"
+
+  depends_on = [google_project_service.apis]
+}

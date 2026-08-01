@@ -33,6 +33,11 @@ output "cloud_run_sa" {
   value       = local.cloud_run_sa
 }
 
+output "fedex_mcp_invoker_email" {
+  description = "FedEx MCP Cloud Run invoker SA email. Grant roles/run.invoker on fedex-tracking-mcp to this SA (deployment/deploy-mcp-fedex.sh does this), and set FEDEX_MCP_INVOKER_SA_EMAIL to this value in the env file so the order agent impersonates it to mint Cloud Run ID tokens. See docs/MCP_FEDEX.md section 7."
+  value       = google_service_account.fedex_mcp_invoker.email
+}
+
 output "nightly_trigger_id" {
   description = "Cloud Build canary quality check trigger ID (used by Cloud Scheduler and for manual runs). Empty until github_connected=true and environment=prod."
   value       = var.github_connected && var.environment == "prod" ? google_cloudbuild_trigger.nightly[0].trigger_id : ""

@@ -217,6 +217,7 @@ def run_custom_inference(
                         intermediate.append(
                             {
                                 "event_id": evt.get("id", ""),
+                                "author": evt.get("author", ""),
                                 "content": content,
                             }
                         )

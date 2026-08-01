@@ -22,12 +22,11 @@
 #      quotes) or proper JSON `'[{"protocolBinding": "X", "url": "Y"}]'` — the
 #      original script used neither. Fixed to shorthand form.
 #
-#   2. `--agent-spec-type=no-spec` / `--mcp-server-spec-type=no-spec` create a
-#      raw Service entry that is NEVER projected into a discoverable
-#      Agent/McpServer resource — confirmed by `gcloud agent-registry
-#      mcp-servers describe <service-id>` and `agents describe <service-id>`
-#      both returning NOT_FOUND immediately (not a propagation delay: polled
-#      8x over ~2.5min, identical error every time). `gcloud iap web
+#   2. `--mcp-server-spec-type=no-spec` creates a raw Service entry that is
+#      NEVER projected into a discoverable McpServer resource — confirmed by
+#      `gcloud agent-registry mcp-servers describe <service-id>` returning
+#      NOT_FOUND immediately (not a propagation delay: polled 8x over
+#      ~2.5min, identical error every time). `gcloud iap web
 #      add-iam-policy-binding --mcp-server=<service-id>` fails the same way,
 #      because that flag also resolves against the *projected* resource, not
 #      the raw Service. Providing real spec content (`--mcp-server-spec-type=
@@ -41,16 +40,22 @@
 #      content (we know its schema — one tool, `track_shipment`) and captures
 #      the generated `registryResource` ID for the IAM binding.
 #
-#      The order agent has NO equivalent fix available in Phase 1: it isn't an
-#      A2A agent, so there's no real `--agent-spec-content` (an A2A agent
-#      card) to provide, and `no-spec` is the only option — meaning it stays
-#      unprojected and undiscoverable as an `Agent` resource. This does NOT
-#      block the egress authorization below (the IAM binding's `--member` is
-#      the order agent's SPIFFE principal string, addressed directly, not via
-#      an Agent Registry resource ID) — but it does mean the order agent won't
-#      show up in registry-based agent discovery/listing until it's migrated
-#      to A2A (spec Phase 2). This is a genuine, live-confirmed argument for
-#      why that migration matters, not just an architectural preference.
+#      CORRECTION (re-verified live ~6 hours after the original test, same
+#      project): `--agent-spec-type=no-spec` DOES eventually project a
+#      discoverable `agents/<generated-id>` resource — `gcloud agent-registry
+#      agents describe` on "customer-support-order-agent"'s generated ID
+#      returned full content (protocols, interfaces), not NOT_FOUND. The
+#      original claim that it never projects was based on an immediate
+#      (~2.5min) poll; whether the true cause is longer eventual-consistency
+#      latency for `agent-spec-type` specifically (vs. `mcp-server-spec-type`,
+#      not re-tested at this delay) is unconfirmed. Net effect: the order
+#      agent's own no-spec registration IS registry-discoverable — this does
+#      not change the egress IAM binding below (its `--member` is the order
+#      agent's SPIFFE principal string, addressed directly, not via a
+#      registry resource ID), but the discoverability gap this finding
+#      previously cited as an A2A-migration argument does not hold as
+#      stated; treat with more caution than the parts of this file marked
+#      "confirmed live."
 #
 #   3. `gcloud iap web add-iam-policy-binding --resource-type=agent-registry`
 #      DOES exist on 578.0.0 (confirmed live) — the previous "could not
@@ -89,6 +94,13 @@ PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectN
 # stays unprojected/undiscoverable as an `Agent` resource (finding #2 above).
 # Registered anyway for basic listing/audit visibility in the console.
 # ------------------------------------------------------------------------------
+# Interface URL is the engine's own Vertex AI resource path, NOT a bare
+# "https://${REGION}-aiplatform.googleapis.com" host — Agent Registry
+# enforces one-service-per-interface-URL project/region-wide, and the bare
+# host collides with ops/register_platform_endpoints.sh's locational
+# aiplatform endpoint registration (confirmed live: that script's `create`
+# failed with "Interface URL '...' is already in use by another service"
+# until this was fixed).
 echo "Registering the Agent Engine with Agent Registry..."
 if ! gcloud agent-registry services describe "customer-support-order-agent" --project="$PROJECT_ID" --location="$REGION" >/dev/null 2>&1; then
   gcloud agent-registry services create "customer-support-order-agent" \
@@ -96,7 +108,7 @@ if ! gcloud agent-registry services describe "customer-support-order-agent" --pr
     --location="$REGION" \
     --display-name="Customer Support Order Agent (Agent Engine)" \
     --agent-spec-type=no-spec \
-    --interfaces="protocolBinding=jsonrpc,url=https://${REGION}-aiplatform.googleapis.com"
+    --interfaces="protocolBinding=jsonrpc,url=https://${REGION}-aiplatform.googleapis.com/v1/${ENGINE_RESOURCE}"
 else
   echo "  Already registered, skipping create."
 fi

@@ -127,3 +127,54 @@ Global ALB + Armor + CDN + ingress lock; europe-west1 stack; SLO re-baseline; en
 1. Gate zero result — does `async_stream_query` surface remote A2A events? (Determines Phase 2 start.)
 2. Auth Manager Terraform support — IaC or runbook? (Resolve during Phase 1.)
 3. Approver notification channel — Pub/Sub → email vs. in-app only for v2? (Product call, low risk either way.)
+
+## 8. Addendum (2026-08-01): Phase 1 live-execution findings
+
+Phase 1 (FedEx MCP + Gateway/Registry governance) was implemented and run
+live against workshop-494016. Two findings materially affect D2/D3 and are
+detailed in full in `docs/MCP_FEDEX.md` §7 — summarized here because they
+change how D3's "tool-level IAM" is actually achieved:
+
+- **D2/D3 revision — Cloud Run invoker auth is not a direct consumer of
+  Agent Identity.** The order agent calling FedEx MCP over
+  `--no-allow-unauthenticated` Cloud Run 401s when the ID token comes
+  straight from the AGENT_IDENTITY engine's ADC: Cloud Run's OIDC invoker
+  check and Agent Identity's SPIFFE/mTLS trust domain are separate
+  verification paths that don't interoperate directly. Google's own
+  reference implementation (`cloudnet-agent-gateway` codelab,
+  `demos/agent-gateway/src/mortgage-agent/deploy_agent.py`) bridges them
+  with a dedicated invoker service account: the agent's Agent Identity
+  principal is granted `roles/iam.serviceAccountTokenCreator` on that SA,
+  the SA (not the agent) holds `roles/run.invoker` on the Cloud Run service,
+  and the agent impersonates the SA to mint its Cloud Run ID token. D3's
+  "tool-level IAM" therefore composes as: Agent Gateway + Agent Registry
+  govern *reachability* (which hosts an agent may even attempt), while a
+  per-tool invoker SA + impersonation is what makes the actual Cloud Run
+  call succeed. **Implemented and live-verified in dev** (workshop-494016):
+  Terraform applied, Cloud Run binding moved to the invoker SA, Agent Engine
+  redeployed, `track_shipment` confirmed via Cloud Logging to return `200
+  OK` end-to-end with no 401. Staging/prod not yet applied.
+- **D3 addendum — internal Google API hostnames must be pre-registered in
+  Agent Registry as spec-less `endpoints`** (a distinct resource type from
+  `mcpServers`) before Agent Gateway's IAP enforcement can be safely flipped
+  off `DRY_RUN` — confirmed live (enforcing without this broke the engine's
+  own internal `aiplatform.mtls.googleapis.com` calls) and confirmed by the
+  codelab's `terraform/modules/agent-registry-endpoints` reference module,
+  which registers 5 URL variants each for 12 platform APIs. **Implemented
+  and live-verified in dev**: `ops/register_platform_endpoints.sh` (60
+  endpoints registered + granted), then `ops/set_iap_enforcement.sh
+  .env.dev enforce` flipped enforcement on. Both internal platform calls and
+  the FedEx MCP `track_shipment` call succeeded post-flip, independently
+  confirmed via the gateway's own Cloud Logging output showing real
+  `authzPolicyInfo.result: "ALLOWED"` decisions matched to the correct
+  registered resources — enforcement is genuinely active, D3's "tool-level
+  IAM" now actually gates egress rather than only auditing it. Staging/prod
+  not yet applied (no infrastructure exists there at all yet — see
+  `docs/MCP_FEDEX.md` §7 for that gap too).
+
+Both are implemented and live-verified in dev, not just designed — added
+here so a future reader doesn't re-derive them from scratch. See
+`docs/MCP_FEDEX.md` §7 for the full source-of-truth (file paths, exact
+principal strings, the trust-domain discrepancy still needing live
+re-verification, and the corrected `--agent-spec-type=no-spec` projection
+finding).

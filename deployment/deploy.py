@@ -112,6 +112,16 @@ if MODEL_ARMOR_CONFIG["enabled"] and MODEL_ARMOR_CONFIG["template_id"]:
 if os.getenv("MCP_FEDEX_URL"):
     ENV_VARS["MCP_FEDEX_URL"] = os.getenv("MCP_FEDEX_URL")
 
+# Propagate the FedEx MCP invoker SA email, same conditional pattern as
+# MCP_FEDEX_URL above. When set, customer_support_mas/agents/order/mcp.py's
+# header_provider impersonates this SA to mint Cloud Run ID tokens instead of
+# using the engine's own Agent-Identity ADC directly — required because
+# Cloud Run's OIDC invoker check 401s on a token minted straight from an
+# AGENT_IDENTITY engine's ADC (see docs/MCP_FEDEX.md section 7). Sourced from
+# `terraform output fedex_mcp_invoker_email`.
+if os.getenv("FEDEX_MCP_INVOKER_SA_EMAIL"):
+    ENV_VARS["FEDEX_MCP_INVOKER_SA_EMAIL"] = os.getenv("FEDEX_MCP_INVOKER_SA_EMAIL")
+
 # Propagate Model Armor ADK plugin enablement flag to Agent Engine runtime.
 ENV_VARS["MODEL_ARMOR_ADK_PLUGIN"] = os.getenv("MODEL_ARMOR_ADK_PLUGIN", "false")
 

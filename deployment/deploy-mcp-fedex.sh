@@ -41,11 +41,31 @@ fi
 
 gcloud run deploy "$SERVICE" "${DEPLOY_ARGS[@]}"
 
+# Grant the FedEx MCP invoker SA (terraform/modules/core/iam.tf's
+# fedex_mcp_invoker, output as fedex_mcp_invoker_email) run.invoker on this
+# service — NOT the Agent Identity principal directly. Cloud Run's OIDC
+# invoker check rejects a token minted straight from an AGENT_IDENTITY
+# engine's ADC (401 "could not be verified"); the invoker SA is a normal IAM
+# principal Cloud Run already understands, and the agent's Agent Identity
+# only ever holds roles/iam.serviceAccountTokenCreator on it (granted by
+# Terraform). See docs/MCP_FEDEX.md section 7 for the full design.
+INVOKER_SA=$(grep '^FEDEX_MCP_INVOKER_SA_EMAIL=' "$ENV_FILE" | cut -d= -f2- || true)
+
 URL=$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')
 echo ""
 echo "Deployed: ${URL}"
 echo "Set MCP_FEDEX_URL=${URL}/mcp in the env file and redeploy the Agent Engine to enable the toolset."
-echo "Grant the agent identity invoker access (see docs/MCP_FEDEX.md):"
-echo "  gcloud run services add-iam-policy-binding ${SERVICE} --region=${REGION} --project=${PROJECT_ID} \\"
-echo "    --member='principalSet://agents.global.proj-PROJECT_NUMBER.system.id.goog/attribute.platformContainer/aiplatform/projects/PROJECT_NUMBER' \\"
-echo "    --role='roles/run.invoker'"
+
+if [ -n "$INVOKER_SA" ]; then
+  echo "Granting roles/run.invoker to invoker SA ${INVOKER_SA}..."
+  gcloud run services add-iam-policy-binding "$SERVICE" --region="$REGION" --project="$PROJECT_ID" \
+    --member="serviceAccount:${INVOKER_SA}" \
+    --role='roles/run.invoker'
+else
+  echo "FEDEX_MCP_INVOKER_SA_EMAIL is not set in ${ENV_FILE} — skipping the invoker binding."
+  echo "Run 'terraform output fedex_mcp_invoker_email' (terraform/modules/core), set"
+  echo "FEDEX_MCP_INVOKER_SA_EMAIL in ${ENV_FILE}, then grant it manually:"
+  echo "  gcloud run services add-iam-policy-binding ${SERVICE} --region=${REGION} --project=${PROJECT_ID} \\"
+  echo "    --member='serviceAccount:FEDEX_MCP_INVOKER_SA_EMAIL' \\"
+  echo "    --role='roles/run.invoker'"
+fi

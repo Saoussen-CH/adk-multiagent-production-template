@@ -43,7 +43,7 @@ ENV ?= dev
         eval-post-deploy \
         frontend-install frontend-build frontend-dev \
         deploy-agent-engine test-local \
-        deploy-cloud-run deploy-mcp-fedex setup-gateway submit-build nightly \
+        deploy-cloud-run deploy-mcp-fedex setup-gateway register-platform-endpoints submit-build nightly \
         bootstrap-tfstate terraform-init terraform-plan terraform-apply terraform-destroy infra-up
 
 # ==============================================================================
@@ -335,6 +335,10 @@ setup-gateway: ## Create egress Agent Gateway + Registry entries for FedEx MCP (
 	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
 	bash ops/setup_agent_gateway.sh $(ENV_FILE)
 	bash ops/register_agent_registry.sh $(ENV_FILE)
+
+register-platform-endpoints: ## Register internal Google API hostnames in Agent Registry (prerequisite before flipping IAP enforcement off DRY_RUN — see docs/MCP_FEDEX.md section 7)
+	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
+	bash ops/register_platform_endpoints.sh $(ENV_FILE)
 
 nightly: ## Trigger the canary quality check Cloud Build job (real-traffic agentic eval vs champion)
 	@# Override with SINCE=1d, MIN_SESSIONS=50, RELATIVE_THRESHOLD=0.15, ABSOLUTE_FLOOR=0.5

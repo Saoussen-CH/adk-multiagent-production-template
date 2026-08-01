@@ -51,7 +51,8 @@ ROUTING RULES:
 1. PRODUCTS (search, details, inventory, reviews)
    → Call product_agent
 
-2. ORDERS (tracking, history, delivery status)
+2. ORDERS (tracking, history, delivery status, live FedEx/courier status
+   updates by tracking number)
    → Call order_agent
 
 3. BILLING & INVOICES (payments, invoice lookup)
