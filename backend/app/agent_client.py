@@ -139,7 +139,7 @@ class AgentEngineClient:
         agent_engine_session_id: Optional[str],
         message: str,
         timeout_seconds: float = DEFAULT_QUERY_TIMEOUT_SECONDS,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, Optional[list]]:
         """
         Query the deployed Agent Engine using async_stream_query with retry logic.
 
@@ -161,7 +161,13 @@ class AgentEngineClient:
             timeout_seconds: Maximum time to wait for response (default: 120s)
 
         Returns:
-            Tuple of (response_text, agent_engine_session_id)
+            Tuple of (response_text, agent_engine_session_id, reason_codes).
+            reason_codes is the [{code, label}] list from check_if_refundable's
+            tool response when that tool ran this turn, else None — lets the
+            frontend render the refund reasons as clickable options instead of
+            the user having to type free text. check_if_refundable is a direct
+            root-agent tool (not behind an AgentTool wrapper), so its
+            function_response.response is the tool's raw return dict.
 
         Raises:
             TimeoutError: If the operation exceeds timeout_seconds
@@ -207,6 +213,7 @@ class AgentEngineClient:
                 # Stream the query to the agent using Agent Engine's session
                 response_text = ""
                 event_count = 0
+                reason_codes: Optional[list] = None
 
                 async for event in self.remote_app.async_stream_query(
                     user_id=user_id, session_id=agent_engine_session_id, message=message
@@ -232,6 +239,15 @@ class AgentEngineClient:
                                     elif part.get("function_call"):
                                         fn = part["function_call"]
                                         logger.debug("Tool call", tool=fn.get("name"), args=fn.get("args", {}))
+                                    elif part.get("function_response"):
+                                        fn_resp = part["function_response"]
+                                        # check_if_refundable is a direct root-agent tool, so its
+                                        # response is the tool's raw return dict (not wrapped in
+                                        # {"result": ...} the way AgentTool sub-agent calls are).
+                                        if fn_resp.get("name") == "check_if_refundable":
+                                            codes = (fn_resp.get("response") or {}).get("reason_codes")
+                                            if codes:
+                                                reason_codes = codes
 
                         # Also check for direct text field
                         if "text" in event:
@@ -245,7 +261,7 @@ class AgentEngineClient:
 
                 _circuit_breaker.record_success()
                 # Return agent_engine_session_id so it can be tracked in our database
-                return response_text, agent_engine_session_id
+                return response_text, agent_engine_session_id, reason_codes
 
         except asyncio.TimeoutError:
             _circuit_breaker.record_failure()

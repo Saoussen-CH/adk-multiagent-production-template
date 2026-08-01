@@ -5,9 +5,14 @@ import type { Message } from '../types';
 interface MessageListProps {
   messages: Message[];
   isLoading?: boolean;
+  /** Called with a reason code's label when the user clicks one of the
+   * refund-reason options — sends it as the next chat message, same as
+   * if the user had typed it. */
+  onSelectReasonCode?: (label: string) => void;
 }
 
-export default function MessageList({ messages, isLoading }: MessageListProps) {
+export default function MessageList({ messages, isLoading, onSelectReasonCode }: MessageListProps) {
+  const lastMessageId = messages.length > 0 ? messages[messages.length - 1].id : undefined;
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -57,6 +62,23 @@ export default function MessageList({ messages, isLoading }: MessageListProps) {
                 </div>
                 <div style={styles.messageContent}>
                   <div style={styles.messageText}>{message.content}</div>
+                  {message.reasonCodes &&
+                    message.reasonCodes.length > 0 &&
+                    message.id === lastMessageId &&
+                    !isLoading && (
+                      <div style={styles.reasonCodes}>
+                        {message.reasonCodes.map((rc) => (
+                          <button
+                            key={rc.code}
+                            type="button"
+                            style={styles.reasonCodeButton}
+                            onClick={() => onSelectReasonCode?.(rc.label)}
+                          >
+                            {rc.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   <div style={styles.messageTime}>
                     {message.timestamp.toLocaleTimeString([], {
                       hour: '2-digit',
@@ -182,6 +204,22 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: '1.5',
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
+  },
+  reasonCodes: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    marginTop: '4px',
+  },
+  reasonCodeButton: {
+    textAlign: 'left',
+    padding: '8px 12px',
+    borderRadius: '10px',
+    border: '1px solid #d1d5db',
+    backgroundColor: 'white',
+    color: '#1f2937',
+    fontSize: '14px',
+    cursor: 'pointer',
   },
   messageTime: {
     fontSize: '12px',

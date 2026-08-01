@@ -448,7 +448,7 @@ async def chat(
                 logger.error("Model Armor check error (failing open)", error=str(ma_err))
 
         # Query the agent
-        response_text, agent_engine_session_id = await agent_client.query_agent(
+        response_text, agent_engine_session_id, reason_codes = await agent_client.query_agent(
             user_id=actual_user_id, agent_engine_session_id=agent_engine_session_id, message=request.message
         )
 
@@ -466,7 +466,12 @@ async def chat(
         db.save_message(internal_session_id, "user", request.message)
         db.save_message(internal_session_id, "assistant", response_text)
 
-        return ChatResponse(response=response_text, user_id=actual_user_id, session_id=internal_session_id)
+        return ChatResponse(
+            response=response_text,
+            user_id=actual_user_id,
+            session_id=internal_session_id,
+            reason_codes=reason_codes,
+        )
 
     except HTTPException:
         increment_chat_errors()

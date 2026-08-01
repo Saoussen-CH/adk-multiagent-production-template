@@ -58,12 +58,27 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Optional session ID for specific conversation thread")
 
 
+class RefundReasonCode(BaseModel):
+    """One selectable refund reason from the active refund policy."""
+
+    code: str
+    label: str
+
+
 class ChatResponse(BaseModel):
     """Response from the agent."""
 
     response: str = Field(..., description="Agent response")
     user_id: str = Field(..., description="User identifier")
     session_id: str = Field(..., description="Session ID for this conversation")
+    reason_codes: Optional[List[RefundReasonCode]] = Field(
+        None,
+        description=(
+            "Present only when check_if_refundable ran this turn: the "
+            "active policy's eligible refund reasons, for the frontend to "
+            "render as clickable options instead of a free-text prompt."
+        ),
+    )
 
 
 # =============================================================================

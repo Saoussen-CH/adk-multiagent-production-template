@@ -54,11 +54,17 @@ export interface SessionListResponse {
 // MESSAGES & CHAT
 // =============================================================================
 
+export interface RefundReasonCode {
+  code: string;
+  label: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  reasonCodes?: RefundReasonCode[];
 }
 
 export interface ChatRequest {
@@ -70,6 +76,7 @@ export interface ChatResponse {
   response: string;
   user_id: string;
   session_id: string;
+  reason_codes?: RefundReasonCode[];
 }
 
 export interface MessageInfo {

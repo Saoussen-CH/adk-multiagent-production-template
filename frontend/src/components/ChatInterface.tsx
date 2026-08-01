@@ -108,6 +108,7 @@ export default function ChatInterface({ currentSessionId, onSessionCreated }: Ch
         role: 'assistant',
         content: response.response,
         timestamp: new Date(),
+        reasonCodes: response.reason_codes,
       };
 
       // Determine if we should display the response
@@ -219,7 +220,11 @@ export default function ChatInterface({ currentSessionId, onSessionCreated }: Ch
         </div>
       )}
 
-      <MessageList messages={messages} isLoading={isLoading || isLoadingHistory} />
+      <MessageList
+        messages={messages}
+        isLoading={isLoading || isLoadingHistory}
+        onSelectReasonCode={handleSendMessage}
+      />
       <MessageInput onSendMessage={handleSendMessage} disabled={isLoading} />
     </div>
   );
