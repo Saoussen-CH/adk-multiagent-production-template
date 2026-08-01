@@ -97,6 +97,13 @@ steps:
         export PATH="/workspace/.venv/bin:$$PATH"
         pytest tests/unit/test_tools.py tests/unit/test_mock_rag.py \
                tests/unit/test_refund_standalone.py \
+               tests/unit/test_refund_approvals.py \
+               tests/unit/test_admin_refund_endpoints.py \
+               tests/unit/test_refund_staging.py \
+               tests/unit/test_fedex_client.py \
+               tests/unit/test_fedex_mcp_server.py \
+               tests/unit/test_order_mcp_toolset.py \
+               tests/unit/test_deploy_plugins.py \
                tests/unit/test_agent_eval_ci.py -v --tb=short
     env:
       - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
@@ -109,6 +116,11 @@ steps:
   # ===========================================================================
   # Integration tests — multi-agent orchestration, standard profile
   # Staging is the last pre-prod gate — must pass before Docker build.
+  # test_fedex_mcp_wiring.py runs alongside: it spawns the FedEx MCP server
+  # locally in mock mode (FEDEX_MOCK=true, no network/LLM calls) to prove
+  # McpToolset can discover track_shipment — low-risk, no live credentials
+  # needed, so it's safe to gate on even though MCP_FEDEX_URL itself is not
+  # set on any deployed engine yet.
   # ===========================================================================
   - id: "integration-tests"
     name: "python:${_PYTHON_VERSION}-slim"
@@ -117,7 +129,7 @@ steps:
       - "-c"
       - |
         export PATH="/workspace/.venv/bin:$$PATH"
-        pytest tests/integration/test_integration_eval_ci.py -v --tb=short
+        pytest tests/integration/test_integration_eval_ci.py tests/integration/test_fedex_mcp_wiring.py -v --tb=short
     env:
       - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
       - "GOOGLE_CLOUD_LOCATION=${_GOOGLE_CLOUD_LOCATION}"
