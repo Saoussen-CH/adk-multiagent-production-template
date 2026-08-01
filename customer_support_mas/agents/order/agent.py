@@ -7,6 +7,8 @@ This module contains the order specialist agent that handles order tracking and 
 from google.adk.agents import Agent
 from google.adk.tools import preload_memory_tool
 
+from customer_support_mas.agents.order.mcp import build_fedex_toolset
+
 # Import tools
 from customer_support_mas.agents.order.tools import (
     get_my_order_history,
@@ -14,7 +16,6 @@ from customer_support_mas.agents.order.tools import (
     get_order_history,
     track_order,
 )
-from customer_support_mas.agents.order.mcp import build_fedex_toolset
 
 # Import callbacks
 from customer_support_mas.callbacks import (

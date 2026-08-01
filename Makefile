@@ -135,12 +135,12 @@ vector-index: ## Create Firestore vector index for semantic search (use ENV=stag
 # ==============================================================================
 
 lint: ## Check code style (ruff check + ruff format --check)
-	ruff check customer_support_agent/ --ignore=E501
-	ruff format customer_support_agent/ --check
+	ruff check customer_support_mas/ --ignore=E501
+	ruff format customer_support_mas/ --check
 
 format: ## Auto-fix formatting with ruff
-	ruff format customer_support_agent/
-	ruff check customer_support_agent/ --fix --ignore=E501
+	ruff format customer_support_mas/
+	ruff check customer_support_mas/ --fix --ignore=E501
 
 # ==============================================================================
 # TESTS

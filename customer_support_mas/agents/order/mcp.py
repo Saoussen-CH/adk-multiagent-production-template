@@ -37,6 +37,7 @@ Independent of Agent Identity/CAA either way — the CAA opt-out
 (GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES) governs the
 platform's own internal API calls, not this Cloud Run invoker path.
 """
+
 import asyncio
 import os
 from typing import Optional
@@ -51,9 +52,7 @@ def _impersonated_id_token_sync(audience: str, invoker_sa_email: str) -> str:
     import google.auth.impersonated_credentials
     import google.auth.transport.requests
 
-    source_credentials, _ = google.auth.default(
-        scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
+    source_credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     target_credentials = google.auth.impersonated_credentials.Credentials(
         source_credentials=source_credentials,
         target_principal=invoker_sa_email,
