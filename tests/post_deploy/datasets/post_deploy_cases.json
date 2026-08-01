@@ -61,12 +61,5 @@
     "expected_tool_use": [
       {"tool_name": "refund_agent", "tool_input": {"request": "refund Wireless Headphones Pro from order ORD-67890, reason: damaged"}}
     ]
-  },
-  {
-    "prompt": "Can you give me a live FedEx courier status update for tracking number 794658790132?",
-    "reference": "The live FedEx courier status for tracking number 794658790132 is: In transit. Latest scan event: Departed FedEx hub (Memphis, TN); prior event: Picked up (Austin, TX).",
-    "expected_tool_use": [
-      {"tool_name": "order_agent", "tool_input": {"request": "live FedEx courier status for tracking number 794658790132 (requires MCP_FEDEX_URL on the target engine)"}}
-    ]
   }
 ]

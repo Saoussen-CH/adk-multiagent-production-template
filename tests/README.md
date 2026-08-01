@@ -65,7 +65,8 @@ tests/
 │
 └── post_deploy/                         # Post-Deploy Eval (Layer 4)
     ├── datasets/
-    │   └── post_deploy_cases.json       # 10 eval cases (product, order, billing, refund)
+    │   ├── post_deploy_cases.json       # 9 eval cases (product, order, billing, refund) — release-gating
+    │   └── fedex_tracking_cases.json    # 1 case, opt-in only — not wired into any cloudbuild _EVAL_DATASET (see docs/MCP_FEDEX.md)
     └── dataset_converter.py             # ADK evalset → Vertex AI DataFrame converter
 ```
 
@@ -324,9 +325,9 @@ validate_order_id → check_refund_eligibility → process_refund
 
 | Scenario | Order | Tested via | Result |
 |----------|-------|-----------|--------|
-| Valid refund (in transit) | ORD-12345 | AgentEvaluator + standalone | Approved |
-| Valid refund (delivered, in window) | ORD-67890 | AgentEvaluator + standalone | Approved |
-| Valid refund (processing) | ORD-22222 | standalone | Approved |
+| Valid refund (in transit) | ORD-12345 | AgentEvaluator + standalone | Submitted for approval |
+| Valid refund (delivered, in window) | ORD-67890 | AgentEvaluator + standalone | Submitted for approval |
+| Valid refund (processing) | ORD-22222 | standalone | Submitted for approval |
 | Denied (past 30-day window) | ORD-11111 | standalone + test_tools | Denied |
 | Invalid order | ORD-99999 | standalone + test_tools | Error |
 | Eligibility check only | Various | AgentEvaluator (`test_refund_eligibility`) | Checked |

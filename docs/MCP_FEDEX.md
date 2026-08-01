@@ -55,6 +55,21 @@ After deploying:
    (`.env` / `.env.staging` / `.env.prod`).
 2. Redeploy the Agent Engine so the order agent picks up the toolset:
    `make deploy-agent-engine ENV=dev`.
+3. Manually verify the live-tracking path with
+   `tests/post_deploy/datasets/fedex_tracking_cases.json` — this is a
+   deliberately **opt-in** dataset, not wired into any cloudbuild
+   `_EVAL_DATASET` release gate (those still point at
+   `tests/post_deploy/datasets/post_deploy_cases.json`, which contains no
+   FedEx case), because the case can only pass once `MCP_FEDEX_URL` is
+   actually set on the target engine and no cloudbuild pipeline sets it
+   today:
+
+   ```bash
+   PYTHONPATH=. python tests/eval_vertex.py \
+     --agent-engine-id <id> \
+     --dataset tests/post_deploy/datasets/fedex_tracking_cases.json \
+     --custom-inference
+   ```
 
 ## 3. Real FedEx credentials
 
