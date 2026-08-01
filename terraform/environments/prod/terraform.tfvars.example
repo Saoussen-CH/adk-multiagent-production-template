@@ -22,6 +22,7 @@ github_owner        = "YOUR_GITHUB_USERNAME"
 # cloud_run_service_name = "customer-support-app"
 # model_armor_enabled   = true
 # model_armor_floor_mode = "INSPECT_AND_BLOCK"  # prod: block harmful content
+# fedex_secrets_enabled = true  # create fedex-client-id/-secret Secret Manager resources (see docs/MCP_FEDEX.md)
 # canary_traffic_percent           = 10    # % traffic to new revision on canary enable
 # canary_check_since               = "2h"  # how far back to pull real sessions for the canary quality check
 # canary_check_min_sessions        = 20    # min real sessions per engine before deciding

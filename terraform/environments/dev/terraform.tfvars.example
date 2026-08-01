@@ -22,3 +22,4 @@ github_owner        = "YOUR_GITHUB_USERNAME"
 # cloud_run_service_name = "customer-support-app"
 # model_armor_enabled   = true
 # model_armor_floor_mode = "INSPECT_ONLY"  # dev: log only, don't block
+# fedex_secrets_enabled = true  # create fedex-client-id/-secret Secret Manager resources (see docs/MCP_FEDEX.md)

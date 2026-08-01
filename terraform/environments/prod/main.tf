@@ -49,6 +49,7 @@ module "core" {
   cloudbuild_repo_name                 = var.cloudbuild_repo_name
   model_armor_enabled                  = var.model_armor_enabled
   model_armor_floor_mode               = var.model_armor_floor_mode
+  fedex_secrets_enabled                = var.fedex_secrets_enabled
   tfstate_bucket_name                  = var.tfstate_bucket_name
   canary_traffic_percent               = var.canary_traffic_percent
   canary_check_since                   = var.canary_check_since

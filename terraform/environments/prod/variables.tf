@@ -86,6 +86,12 @@ variable "model_armor_enabled" {
   default = true
 }
 
+variable "fedex_secrets_enabled" {
+  description = "Create FedEx API credential secrets (values are set out-of-band via gcloud, never in Terraform)."
+  type        = bool
+  default     = false
+}
+
 variable "model_armor_floor_mode" {
   type    = string
   default = "INSPECT_AND_BLOCK"
