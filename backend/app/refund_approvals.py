@@ -126,9 +126,27 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
     reason = request["reason"]
     reason_category = request["reason_category"]
 
-    # Execute: write the refund record. This is the exact shape the old
-    # (pre-HITL) process_refund wrote directly to "refunds" — copied
-    # verbatim so refund records look identical to before Task 8.
+    # Execute: write the refund record. This is CLOSE to, but not byte-identical
+    # with, the shape the old (pre-HITL) process_refund wrote directly to
+    # "refunds":
+    #   - "items" here preserves every field already on the staged item dict
+    #     (product_id/name/qty/price for real order items) and adds the same
+    #     per-item "refund_amount" the old code computed, so for real order
+    #     data the resulting shape matches. Unlike the old code, this does
+    #     NOT hard-require "name" to be present (item.get, not item[]) —
+    #     deliberately, since the PENDING_APPROVAL doc this reads is written
+    #     by process_refund()'s own item shape, not re-derived from "orders"
+    #     here, and this module shouldn't assume its exact keys.
+    #   - "original_order_total" from the old record is intentionally NOT
+    #     reproduced: the PENDING_APPROVAL request doc this function reads
+    #     (see `request` above) only carries order_id/user_id/items/
+    #     refund_amount/reason/reason_category — it never stored the order's
+    #     total. Recovering it here would mean this module doing its own
+    #     "orders" collection lookup, which is more coupling than this
+    #     execute-only module (see module docstring) should take on for a
+    #     field nothing currently reads. If a consumer needs it, prefer
+    #     having process_refund() capture order_data.get("total") into the
+    #     request doc at staging time, not adding a lookup here.
     refund_id = f"REF-{order_id.replace('ORD-', '')}-{uuid.uuid4().hex[:8]}"
     refund_record = {
         "refund_id": refund_id,
@@ -142,7 +160,10 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
         # git history). Do not "fix" this into timezone-aware; that would be a
         # regression in the refund record's historical shape.
         "created_at": datetime.now().isoformat(),
-        "items": items,
+        "items": [
+            {**item, "refund_amount": item.get("price", 0) * item.get("qty", 1)}
+            for item in items
+        ],
         "total_refund_amount": refund_amount,
     }
     db.collection(REFUNDS_COLLECTION).document(refund_id).set(refund_record)

@@ -116,7 +116,10 @@ def test_approve_executes_once():
     assert refund_doc["reason_category"] == "product_defect"
     assert refund_doc["status"] == "pending"  # refund's own lifecycle status
     assert refund_doc["total_refund_amount"] == 49.99
-    assert refund_doc["items"] == [{"item_id": "ITEM-1", "product_id": "ITEM-1", "price": 49.99}]
+    # Per-item refund_amount is computed and added (mirrors pre-HITL process_refund).
+    assert refund_doc["items"] == [
+        {"item_id": "ITEM-1", "product_id": "ITEM-1", "price": 49.99, "refund_amount": 49.99}
+    ]
     assert "created_at" in refund_doc
 
     request_doc = db.collection("refund_requests").document(rid).get().to_dict()

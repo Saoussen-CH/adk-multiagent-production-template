@@ -27,7 +27,6 @@ MAX_INVOICE_ID_LENGTH = 30
 ORDER_ID_PATTERN = re.compile(r"^ORD-\d{5,10}$")
 PRODUCT_ID_PATTERN = re.compile(r"^PROD-\d{3,10}$")
 INVOICE_ID_PATTERN = re.compile(r"^INV-\d{4}-\d{3,10}$")
-REFUND_ID_PATTERN = re.compile(r"^REF-\d{5,10}-\d{2}$")
 
 # Safe characters for search queries (alphanumeric, spaces, basic punctuation)
 SAFE_QUERY_PATTERN = re.compile(r'^[a-zA-Z0-9\s\-$.,!?\'"()]+$')
