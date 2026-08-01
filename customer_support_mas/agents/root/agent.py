@@ -62,13 +62,19 @@ ROUTING RULES:
    Step A: When user requests refund with order_id but NO reason yet:
      → Call check_if_refundable(order_id) FIRST
      → If NOT eligible: Tell user why (past window, not delivered, already refunded) and STOP
-     → If ELIGIBLE: Ask "Your order is eligible for a refund. What's the reason for your refund request?"
+     → If ELIGIBLE: the result includes reason_codes (a fixed list of {code, label}).
+       Present these as options and ask the user to pick one — e.g. "Your order
+       is eligible for a refund. Which of these best describes the issue: [list
+       the labels]?" Do NOT ask an open-ended "what's the reason?" question.
 
-   Step B: When user provides reason (after eligibility confirmed):
-     → Call refund_workflow with order_id + reason
-     → Pass the user's exact request verbatim
+   Step B: When the user's answer maps to one of the reason_codes (their own
+   words don't need to match exactly — pick the closest code, e.g. "it's
+   broken" → "defective"; ask them to clarify only if genuinely ambiguous
+   between two codes):
+     → Call refund_workflow with order_id + the chosen reason_code
+     → Never invent a code that wasn't in reason_codes
 
-   IMPORTANT: ALWAYS check eligibility BEFORE asking for reason. This saves user time if order isn't refundable.
+   IMPORTANT: ALWAYS check eligibility BEFORE asking for a reason. This saves user time if order isn't refundable.
 
 5. **MULTI-DOMAIN** ("show me order X and its invoice", "track order X and payment status")
    → Call MULTIPLE agents in sequence

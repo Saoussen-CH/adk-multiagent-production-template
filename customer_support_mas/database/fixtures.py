@@ -422,11 +422,24 @@ def get_sample_data():
         },
     }
 
+    # Refund policy as versioned config, not hardcoded constants — see
+    # customer_support_mas/agents/refund/policy.py. This seeds the same
+    # values policy.py's DEFAULT_POLICY falls back to when unseeded, so
+    # seeding this collection is a real-config equivalent, not a behavior
+    # change. Real orgs would add a second doc with a later effective_from
+    # to change policy going forward without touching past orders.
+    from customer_support_mas.agents.refund.policy import DEFAULT_POLICY
+
+    refund_policy = {
+        "v1": DEFAULT_POLICY,
+    }
+
     return {
         "products": products,
         "inventory": inventory,
         "reviews": reviews,
         "orders": orders,
+        "refund_policy": refund_policy,
         "invoices": invoices,
         "payments": payments,
         "refund_eligibility": refund_eligibility,

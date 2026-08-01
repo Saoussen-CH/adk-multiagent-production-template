@@ -18,43 +18,16 @@ from typing import List, Optional
 
 from google.adk.tools.tool_context import ToolContext
 
+from customer_support_mas.agents.refund.policy import get_active_policy, get_reason_code
 from customer_support_mas.auth import audit_log, verify_order_ownership
 from customer_support_mas.database import db_client
 from customer_support_mas.error_handling import tool_error_handler
 from customer_support_mas.validation import (
     validate_order_id,
-    validate_refund_reason,
     validation_error_response,
 )
 
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-
-REFUND_WINDOW_DAYS = 30  # Items can be refunded within 30 days of delivery
-
-# Acceptable refund reasons - these qualify for refunds
-ACCEPTABLE_REFUND_REASONS = {
-    "defective": "Product has a defect or malfunction",
-    "damaged": "Product arrived damaged",
-    "wrong_item": "Received wrong item",
-    "not_as_described": "Product doesn't match description",
-    "missing_parts": "Product missing parts or accessories",
-    "quality_issue": "Product quality below expectations",
-    "arrived_late": "Product arrived significantly late",
-    "duplicate_order": "Accidentally ordered twice",
-}
-
-# Unacceptable refund reasons - these do NOT qualify for refunds
-UNACCEPTABLE_REFUND_REASONS = {
-    "changed_mind": "Changed my mind / No longer want it",
-    "found_cheaper": "Found it cheaper elsewhere",
-    "no_longer_need": "No longer need the product",
-    "gift_unwanted": "Gift recipient didn't want it",
-    "ordering_mistake": "Ordered by mistake (but item is fine)",
-}
 
 
 # =============================================================================
@@ -122,68 +95,18 @@ def _calculate_refund_amount(items: List[dict]) -> float:
     return round(total, 2)
 
 
-def _classify_refund_reason(reason: str) -> tuple[bool, str, str]:
-    """
-    Classify a refund reason as acceptable or not.
-
-    Uses fuzzy matching to categorize user-provided reasons.
-
-    Args:
-        reason: The refund reason provided by the user
-
-    Returns:
-        tuple: (is_acceptable, category, explanation)
-    """
-    reason_lower = reason.lower().strip()
-
-    # Check for unacceptable reasons first (stricter matching)
-    unacceptable_keywords = {
-        "changed_mind": [
-            "changed my mind",
-            "changed mind",
-            "don't want",
-            "dont want",
-            "no longer want",
-            "decided not to",
-        ],
-        "found_cheaper": ["cheaper", "better price", "lower price", "found it for less", "price match"],
-        "no_longer_need": ["don't need", "dont need", "no longer need", "not needed", "unnecessary"],
-        "gift_unwanted": ["gift", "unwanted gift", "didn't like the gift"],
-        "ordering_mistake": ["ordered by mistake", "accidental order", "didn't mean to order", "wrong click"],
-    }
-
-    for category, keywords in unacceptable_keywords.items():
-        for keyword in keywords:
-            if keyword in reason_lower:
-                return False, category, UNACCEPTABLE_REFUND_REASONS[category]
-
-    # Check for acceptable reasons
-    acceptable_keywords = {
-        "defective": ["defective", "defect", "malfunction", "doesn't work", "not working", "broken", "faulty"],
-        "damaged": ["damaged", "damage", "cracked", "dented", "scratched", "torn"],
-        "wrong_item": ["wrong item", "wrong product", "not what i ordered", "different item", "incorrect item"],
-        "not_as_described": ["not as described", "different from", "doesn't match", "false advertising", "misleading"],
-        "missing_parts": ["missing", "incomplete", "parts missing", "accessories missing"],
-        "quality_issue": ["poor quality", "quality issue", "low quality", "cheap", "flimsy"],
-        "arrived_late": ["late", "delayed", "took too long", "never arrived on time"],
-        "duplicate_order": ["duplicate", "ordered twice", "double order"],
-    }
-
-    for category, keywords in acceptable_keywords.items():
-        for keyword in keywords:
-            if keyword in reason_lower:
-                return True, category, ACCEPTABLE_REFUND_REASONS[category]
-
-    # If no match found, default to requiring manual review
-    # Return as potentially acceptable but flag for review
-    return True, "other", "Reason requires manual review - proceeding with refund"
-
-
 def get_acceptable_refund_reasons() -> dict:
-    """Return list of acceptable refund reasons for display to users."""
+    """Return the current policy's refund reason codes for display to users.
+
+    The reason taxonomy is policy config (customer_support_mas/agents/refund/policy.py),
+    not a hardcoded list — this always reflects whatever policy version is
+    active today.
+    """
+    policy = get_active_policy()
+    reason_codes = policy["reason_codes"]
     return {
-        "acceptable": ACCEPTABLE_REFUND_REASONS,
-        "not_acceptable": UNACCEPTABLE_REFUND_REASONS,
+        "acceptable": {r["code"]: r["label"] for r in reason_codes if r["eligible"]},
+        "not_acceptable": {r["code"]: r["label"] for r in reason_codes if not r["eligible"]},
         "note": "Refunds are granted for product issues. 'Changed my mind' or similar reasons do not qualify.",
     }
 
@@ -347,20 +270,25 @@ def check_refund_eligibility(order_id: str, tool_context: ToolContext) -> dict:
         tool_context.actions.escalate = True
         return {"status": "error", "eligible": False, "reason": "Invalid delivery date format"}
 
+    # Judge this order by the policy version in effect when it was delivered,
+    # not whatever the policy happens to be today.
+    policy = get_active_policy(as_of=delivered_date.strftime("%Y-%m-%d"))
+    window_days = policy["window_days"]
+
     days_since_delivery = (datetime.now() - delivered_date).days
 
-    if days_since_delivery > REFUND_WINDOW_DAYS:
+    if days_since_delivery > window_days:
         logger.warning(
-            f"[Refund Workflow - Step 2] Order {order_id} past {REFUND_WINDOW_DAYS}-day window ({days_since_delivery} days)"
+            f"[Refund Workflow - Step 2] Order {order_id} past {window_days}-day window ({days_since_delivery} days)"
         )
         tool_context.actions.escalate = True
         return {
             "status": "not_eligible",
             "eligible": False,
-            "reason": f"Order was delivered {days_since_delivery} days ago. Refunds must be requested within {REFUND_WINDOW_DAYS} days of delivery.",
+            "reason": f"Order was delivered {days_since_delivery} days ago. Refunds must be requested within {window_days} days of delivery.",
             "delivered_date": delivered_date_str,
             "days_since_delivery": days_since_delivery,
-            "refund_window_days": REFUND_WINDOW_DAYS,
+            "refund_window_days": window_days,
         }
 
     # Check 2: Items not already refunded
@@ -397,9 +325,9 @@ def check_refund_eligibility(order_id: str, tool_context: ToolContext) -> dict:
     result = {
         "status": "success",
         "eligible": True,
-        "reason": f"Within {REFUND_WINDOW_DAYS}-day return window ({days_since_delivery} days since delivery)",
+        "reason": f"Within {window_days}-day return window ({days_since_delivery} days since delivery)",
         "days_since_delivery": days_since_delivery,
-        "days_remaining": REFUND_WINDOW_DAYS - days_since_delivery,
+        "days_remaining": window_days - days_since_delivery,
         "eligible_items": [
             {"product_id": item["product_id"], "name": item["name"], "qty": item.get("qty", 1), "price": item["price"]}
             for item in eligible_items
@@ -418,53 +346,72 @@ def check_refund_eligibility(order_id: str, tool_context: ToolContext) -> dict:
 
 
 @tool_error_handler
-def process_refund(order_id: str, reason: str, tool_context: ToolContext) -> dict:
+def process_refund(order_id: str, reason_code: str, tool_context: ToolContext) -> dict:
     """
     Step 3: Stage the refund request for human approval.
 
     This tool NEVER executes a refund - it only stages a PENDING_APPROVAL
     request in the `refund_requests` collection for a human reviewer to
     finalize. It:
-    - Validates the refund reason is acceptable
+    - Validates reason_code is a recognized, eligible policy reason code
     - Records the specific items and refund amount being requested
     - Prevents duplicate staging (idempotent per order+user)
 
+    reason_code is a fixed code from the active refund policy
+    (customer_support_mas/agents/refund/policy.py), not free text — call
+    get_acceptable_refund_reasons() to get the current valid codes. This
+    mirrors how real return flows work (a reason dropdown, not free-text
+    classification): the code-to-eligibility mapping IS the policy, so
+    there's no ambiguous text to interpret.
+
     Args:
         order_id: The order ID to refund
-        reason: The reason for the refund (must be product-related, e.g., "damaged", "defective", "wrong item")
+        reason_code: A reason code from the active policy's reason_codes
+            (e.g. "damaged", "defective", "wrong_item"). If the user's own
+            words don't map cleanly, ask them to pick from
+            get_acceptable_refund_reasons() rather than guessing.
         tool_context: ADK ToolContext (automatically injected)
 
     Returns:
-        dict with staging confirmation including request_id and amount, or rejection if reason not acceptable
+        dict with staging confirmation including request_id and amount, or rejection if the code is invalid/not eligible
     """
     # Input validation
     is_valid, error_msg = validate_order_id(order_id)
     if not is_valid:
         return validation_error_response(error_msg)
 
-    is_valid, error_msg = validate_refund_reason(reason)
-    if not is_valid:
-        return validation_error_response(error_msg)
+    if not reason_code or not isinstance(reason_code, str):
+        return validation_error_response("reason_code is required")
 
     user_id = tool_context.user_id
-    logger.info(f"[Refund Workflow - Step 3] Processing refund for order: {order_id}, reason: {reason}")
+    logger.info(f"[Refund Workflow - Step 3] Processing refund for order: {order_id}, reason_code: {reason_code}")
 
-    # Validate refund reason FIRST (before any other processing)
-    is_acceptable, reason_category, reason_explanation = _classify_refund_reason(reason)
+    # Validate reason_code against the active policy FIRST (before any other
+    # processing) — cheap, no order data needed yet.
+    policy = get_active_policy()
+    reason_info = get_reason_code(policy, reason_code)
 
-    if not is_acceptable:
-        logger.warning(f"[Refund Workflow - Step 3] Reason not acceptable: {reason} -> {reason_category}")
-        audit_log(user_id, "process_refund", "order", order_id, False, f"Reason rejected: {reason_category}")
+    if reason_info is None:
+        logger.warning(f"[Refund Workflow - Step 3] Unknown reason_code: {reason_code}")
         return {
-            "status": "reason_not_acceptable",
-            "message": f"Sorry, '{reason}' is not an acceptable refund reason.",
-            "explanation": reason_explanation,
-            "policy": "Refunds are only granted for product-related issues (defective, damaged, wrong item, etc.).",
-            "acceptable_reasons": list(ACCEPTABLE_REFUND_REASONS.keys()),
-            "suggestion": "If your product has an actual issue, please describe the problem (e.g., 'product is defective', 'arrived damaged').",
+            "status": "invalid_reason_code",
+            "message": f"'{reason_code}' is not a recognized refund reason code.",
+            "valid_reason_codes": [r["code"] for r in policy["reason_codes"]],
         }
 
-    logger.info(f"[Refund Workflow - Step 3] Reason accepted: {reason} -> {reason_category}")
+    if not reason_info["eligible"]:
+        logger.warning(f"[Refund Workflow - Step 3] Reason not acceptable: {reason_code}")
+        audit_log(user_id, "process_refund", "order", order_id, False, f"Reason rejected: {reason_code}")
+        return {
+            "status": "reason_not_acceptable",
+            "message": f"Sorry, '{reason_info['label']}' is not an acceptable refund reason.",
+            "explanation": reason_info["label"],
+            "policy": "Refunds are only granted for product-related issues (defective, damaged, wrong item, etc.).",
+            "acceptable_reasons": [r["code"] for r in policy["reason_codes"] if r["eligible"]],
+            "suggestion": "If your product has an actual issue, please pick the closest matching reason code.",
+        }
+
+    logger.info(f"[Refund Workflow - Step 3] Reason accepted: {reason_code}")
 
     # Final ownership verification
     is_authorized, order_data, error_msg = verify_order_ownership(order_id, user_id, action="process_refund")
@@ -525,8 +472,12 @@ def process_refund(order_id: str, reason: str, tool_context: ToolContext) -> dic
         "user_id": user_id,
         "items": eligible_items,
         "refund_amount": refund_amount,
-        "reason": reason,
-        "reason_category": reason_category,
+        # "reason"/"reason_category" field names kept as-is for
+        # backend/app/refund_approvals.py and the approver UI, which read
+        # them directly — reason is now the policy label (not free text),
+        # reason_category is the policy reason_code.
+        "reason": reason_info["label"],
+        "reason_category": reason_code,
         "status": "PENDING_APPROVAL",
         "requested_at": now.isoformat(),
         "expires_at": (now + timedelta(hours=72)).isoformat(),
@@ -544,10 +495,7 @@ def process_refund(order_id: str, reason: str, tool_context: ToolContext) -> dic
         "order_id": order_id,
         "refund_amount": refund_amount,
         "items": eligible_items,
-        "message": (
-            "Your refund request has been submitted for approval. "
-            "You'll be notified once it's reviewed."
-        ),
+        "message": ("Your refund request has been submitted for approval. You'll be notified once it's reviewed."),
     }
 
 
@@ -643,19 +591,19 @@ def check_if_refundable(order_id: str, tool_context: ToolContext) -> dict:
             "reason": "Invalid delivery date format. Please contact support.",
         }
 
+    policy = get_active_policy(as_of=delivered_date.strftime("%Y-%m-%d"))
+    window_days = policy["window_days"]
     days_since_delivery = (datetime.now() - delivered_date).days
 
-    if days_since_delivery > REFUND_WINDOW_DAYS:
-        logger.info(
-            f"[Refund Pre-Check] Order {order_id} past {REFUND_WINDOW_DAYS}-day window ({days_since_delivery} days)"
-        )
+    if days_since_delivery > window_days:
+        logger.info(f"[Refund Pre-Check] Order {order_id} past {window_days}-day window ({days_since_delivery} days)")
         return {
             "status": "not_eligible",
             "eligible": False,
-            "reason": f"Order was delivered {days_since_delivery} days ago. Refunds must be requested within {REFUND_WINDOW_DAYS} days of delivery.",
+            "reason": f"Order was delivered {days_since_delivery} days ago. Refunds must be requested within {window_days} days of delivery.",
             "delivered_date": delivered_date_str,
             "days_since_delivery": days_since_delivery,
-            "refund_window_days": REFUND_WINDOW_DAYS,
+            "refund_window_days": window_days,
         }
 
     # Check 4: Has items that can be refunded
@@ -682,7 +630,7 @@ def check_if_refundable(order_id: str, tool_context: ToolContext) -> dict:
 
     # All checks passed - order is eligible for refund
     refund_amount = _calculate_refund_amount(refundable_items)
-    days_remaining = REFUND_WINDOW_DAYS - days_since_delivery
+    days_remaining = window_days - days_since_delivery
 
     logger.info(f"[Refund Pre-Check] Order {order_id} is eligible. {len(refundable_items)} items, ${refund_amount}")
 
@@ -702,7 +650,8 @@ def check_if_refundable(order_id: str, tool_context: ToolContext) -> dict:
         ],
         "estimated_refund_amount": refund_amount,
         "days_remaining_in_window": days_remaining,
-        "next_step": "Please provide the reason for your refund request.",
+        "reason_codes": [{"code": r["code"], "label": r["label"]} for r in policy["reason_codes"] if r["eligible"]],
+        "next_step": "Ask the user to pick a reason from reason_codes, then call process_refund with the chosen code.",
     }
 
     if already_refunded_items:
@@ -753,14 +702,16 @@ def get_refundable_items(order_id: str, tool_context: ToolContext) -> dict:
     # Check return window
     delivered_date = _parse_date(order_data.get("delivered_date", ""))
     if delivered_date:
+        policy = get_active_policy(as_of=delivered_date.strftime("%Y-%m-%d"))
+        window_days = policy["window_days"]
         days_since_delivery = (datetime.now() - delivered_date).days
-        if days_since_delivery > REFUND_WINDOW_DAYS:
+        if days_since_delivery > window_days:
             return {
                 "status": "window_expired",
                 "message": f"Return window expired. Order was delivered {days_since_delivery} days ago.",
-                "refund_window_days": REFUND_WINDOW_DAYS,
+                "refund_window_days": window_days,
             }
-        days_remaining = REFUND_WINDOW_DAYS - days_since_delivery
+        days_remaining = window_days - days_since_delivery
     else:
         days_remaining = None
 

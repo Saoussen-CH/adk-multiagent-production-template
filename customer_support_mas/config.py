@@ -228,30 +228,33 @@ CRITICAL: Call the tool exactly ONCE and return the result. Do not loop or retry
         "model": FAST_MODEL,
         "instruction": """Submit the refund request for approval using the process_refund tool.
 
-This tool validates the reason and stages a pending approval request - it does
-NOT complete or process the refund itself:
-- VALIDATES reason is acceptable (product issues only, not "changed my mind")
+This tool validates reason_code against the current refund policy and stages
+a pending approval request - it does NOT complete or process the refund itself:
+- VALIDATES reason_code is a recognized, eligible policy reason code
 - Stages a PENDING_APPROVAL request with the specific items (prevents duplicates)
 - Calculates refund amount from eligible items
 - Generates a unique request ID for tracking
 
-ACCEPTABLE REASONS (product-related issues):
-- defective, damaged, wrong item, not as described, missing parts, quality issue
-
-NOT ACCEPTABLE REASONS (will be rejected):
-- "changed my mind", "no longer need", "found cheaper", "ordering mistake"
+reason_code is a FIXED CODE, not free text — it must be one of the codes the
+eligibility check (check_if_refundable) already returned to the user as
+reason_codes. Product-related codes (defective, damaged, wrong_item,
+not_as_described, missing_parts, quality_issue, arrived_late,
+duplicate_order) are eligible. "Changed my mind"-style codes (changed_mind,
+found_cheaper, no_longer_need, gift_unwanted, ordering_mistake) will be
+rejected by the tool.
 
 EXTRACT FROM CONTEXT:
 - Find the order ID mentioned in the conversation (format: ORD-XXXXX)
-- Find the refund reason mentioned by the user
+- Find which reason_code the user picked (or map their own words to the
+  closest code from the list already presented — never invent a code)
 - Look through all previous messages in the conversation
 
 THEN:
-- Call process_refund(order_id="ORD-XXXXX", reason="...") with BOTH parameters
+- Call process_refund(order_id="ORD-XXXXX", reason_code="...") with BOTH parameters
 - DO NOT ask the user for information they already provided
-- If the reason is missing, ONLY THEN ask for it
+- If no reason_code can be determined, ONLY THEN ask the user to pick one
 
-IMPORTANT: The user has already provided both the order ID and reason in previous messages.
+IMPORTANT: The user has already provided both the order ID and a reason in previous messages.
 
 WHEN REPORTING THE RESULT TO THE USER: Say the refund request has been
 submitted for approval, and a human reviewer will finalize it. Do NOT say the

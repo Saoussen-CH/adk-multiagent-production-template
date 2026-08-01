@@ -52,7 +52,7 @@ sequential_refund_workflow = SequentialAgent(
 
 WORKFLOW STEPS:
 1. Validate Request - Verify ownership, delivery status, and items exist in order
-2. Check Eligibility - Dynamic check: 30-day return window, items not already refunded
+2. Check Eligibility - Dynamic check: policy return window, items not already refunded
 3. Submit for Approval - Stage a pending record for human review; prevents duplicate submissions
 
 SECURITY:
@@ -63,11 +63,13 @@ SECURITY:
 FEATURES:
 - Partial refunds: Refund specific items with item_ids parameter
 - Duplicate prevention: Already-refunded items are automatically excluded
-- Dynamic eligibility: Calculated from delivery date, not static records
+- Dynamic eligibility: Calculated from delivery date against the active refund
+  policy (customer_support_mas/agents/refund/policy.py), not static records
 
 EXPECTED INPUT:
 - Order ID (e.g., "I want a refund for order ORD-12345")
-- Reason (e.g., "broken item", "defective", "wrong item")
+- reason_code: a fixed code from the active policy's reason_codes (e.g.
+  "defective", "damaged", "wrong_item") — not free text
 - Optional: item_ids list for partial refund
 
 VALIDATION GATES:

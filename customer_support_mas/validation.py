@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 MAX_QUERY_LENGTH = 500
-MAX_REASON_LENGTH = 1000
 MAX_ORDER_ID_LENGTH = 20
 MAX_PRODUCT_ID_LENGTH = 20
 MAX_INVOICE_ID_LENGTH = 30
@@ -144,37 +143,6 @@ def validate_search_query(query: str) -> Tuple[bool, Optional[str]]:
 
     if not SAFE_QUERY_PATTERN.match(query):
         return False, "Search query contains invalid characters"
-
-    return True, None
-
-
-def validate_refund_reason(reason: str) -> Tuple[bool, Optional[str]]:
-    """
-    Validate a refund reason string.
-
-    Args:
-        reason: The refund reason to validate
-
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-    if not reason:
-        return False, "Refund reason is required"
-
-    if not isinstance(reason, str):
-        return False, "Refund reason must be a string"
-
-    reason = reason.strip()
-
-    if len(reason) == 0:
-        return False, "Refund reason cannot be empty"
-
-    if len(reason) > MAX_REASON_LENGTH:
-        return False, f"Refund reason too long (max {MAX_REASON_LENGTH} characters)"
-
-    # Allow more characters in reason (users describe problems)
-    if not re.match(r'^[a-zA-Z0-9\s\-.,!?\'"()/:;]+$', reason):
-        return False, "Refund reason contains invalid characters"
 
     return True, None
 

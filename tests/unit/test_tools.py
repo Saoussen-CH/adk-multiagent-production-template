@@ -309,7 +309,7 @@ class TestWorkflowTools:
         """Test that a valid refund request is staged for approval, not executed."""
         from customer_support_mas.agents.refund.tools import process_refund
 
-        result = process_refund(order_id="ORD-67890", reason="Product is defective", tool_context=mock_tool_context)
+        result = process_refund(order_id="ORD-67890", reason_code="defective", tool_context=mock_tool_context)
 
         assert result["status"] == "pending_approval"
         assert "request_id" in result
@@ -328,7 +328,7 @@ class TestWorkflowTools:
         """Test processing refund for invalid order."""
         from customer_support_mas.agents.refund.tools import process_refund
 
-        result = process_refund(order_id="ORD-99999", reason="Test", tool_context=mock_tool_context)
+        result = process_refund(order_id="ORD-99999", reason_code="defective", tool_context=mock_tool_context)
 
         assert result["status"] == "error"
 
@@ -336,9 +336,19 @@ class TestWorkflowTools:
         """Test processing refund with unacceptable reason."""
         from customer_support_mas.agents.refund.tools import process_refund
 
-        result = process_refund(order_id="ORD-67890", reason="I changed my mind", tool_context=mock_tool_context)
+        result = process_refund(order_id="ORD-67890", reason_code="changed_mind", tool_context=mock_tool_context)
 
         assert result["status"] == "reason_not_acceptable"
+
+    def test_process_refund_unrecognized_reason_code(self, mock_tool_context):
+        """A code that isn't in the policy's reason_codes is rejected outright,
+        not fuzzy-matched — the fixed-code design has no fallback bucket."""
+        from customer_support_mas.agents.refund.tools import process_refund
+
+        result = process_refund(order_id="ORD-67890", reason_code="the_dog_ate_it", tool_context=mock_tool_context)
+
+        assert result["status"] == "invalid_reason_code"
+        assert "valid_reason_codes" in result
 
 
 # =============================================================================
@@ -435,7 +445,7 @@ class TestRefundWorkflowIntegration:
         )
 
         order_id = "ORD-67890"
-        reason = "Integration test - defective item"
+        reason_code = "defective"
 
         # Step 0: Pre-check (new conversational flow)
         precheck_result = check_if_refundable(order_id, tool_context=mock_tool_context)
@@ -452,7 +462,7 @@ class TestRefundWorkflowIntegration:
         assert eligibility_result["eligible"], f"Order not eligible: {eligibility_result}"
 
         # Step 3: Process refund (stages a pending approval request, does not execute)
-        refund_result = process_refund(order_id, reason, tool_context=mock_tool_context)
+        refund_result = process_refund(order_id, reason_code, tool_context=mock_tool_context)
         assert refund_result["status"] == "pending_approval", f"Staging failed: {refund_result}"
         assert "request_id" in refund_result
 
@@ -507,8 +517,8 @@ class TestRefundWorkflowIntegration:
         assert "next_step" in precheck  # Should prompt for reason
 
         # Step 2: User provides reason, refund request is staged for approval
-        reason = "Product arrived damaged"
-        result = process_refund(order_id, reason, tool_context=mock_tool_context)
+        reason_code = "damaged"
+        result = process_refund(order_id, reason_code, tool_context=mock_tool_context)
         assert result["status"] == "pending_approval"
 
         # Cleanup - via the actually-patched db_client (see _active_refund_db_client()).

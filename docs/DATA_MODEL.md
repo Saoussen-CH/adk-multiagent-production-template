@@ -246,8 +246,8 @@ The refund system includes comprehensive validation and tracking:
 | Step | Tool | Validates |
 |------|------|-----------|
 | 1 | `validate_refund_request()` | Ownership, delivery status, items exist in order |
-| 2 | `check_refund_eligibility()` | 30-day return window, items not already refunded |
-| 3 | `process_refund()` | Stages a `PENDING_APPROVAL` refund request (in `refund_requests`) for human review — never writes `refunds` directly |
+| 2 | `check_refund_eligibility()` | Return window (from active refund policy), items not already refunded |
+| 3 | `process_refund()` | `reason_code` is a recognized, eligible policy reason code; stages a `PENDING_APPROVAL` refund request (in `refund_requests`) for human review — never writes `refunds` directly |
 
 ### Features
 
@@ -267,12 +267,29 @@ The refund system includes comprehensive validation and tracking:
 
 ```
 1. Order must be delivered (status = "Delivered")
-2. Within 30-day return window from delivery date
+2. Within the active policy's return window from delivery date (default 30 days)
 3. Items not previously refunded
-4. Reason must be product-related (not "changed my mind")
+4. reason_code must be one of the active policy's eligible codes
 ```
 
-### Acceptable vs Unacceptable Refund Reasons
+### Refund policy is versioned configuration, not hardcoded constants
+
+`customer_support_mas/agents/refund/policy.py`'s `get_active_policy(as_of)`
+reads a `refund_policy` Firestore collection and returns the policy version
+whose `effective_from` is the latest one `<= as_of` — so an order is judged
+by the policy in effect when it was *delivered*, not whatever the policy
+happens to be today. Falls back to `DEFAULT_POLICY` if the collection is
+empty/unseeded. To change policy going forward without affecting orders
+already in flight, add a new `refund_policy` document with a later
+`effective_from` rather than editing the existing one.
+
+The refund *reason* is a fixed code from `policy["reason_codes"]`, not free
+text — `process_refund(order_id, reason_code, ...)` rejects any code that
+isn't in the active policy outright. `check_if_refundable()` returns the
+current eligible codes as `reason_codes: [{code, label}]` so the agent
+presents them as options instead of asking an open-ended question.
+
+### Acceptable vs Unacceptable Refund Reason Codes (default policy)
 
 | Acceptable (Product Issues) | Unacceptable (Not Product Issues) |
 |-----------------------------|-----------------------------------|
@@ -282,6 +299,8 @@ The refund system includes comprehensive validation and tracking:
 | not_as_described | gift_unwanted |
 | missing_parts | ordering_mistake |
 | quality_issue | |
+| arrived_late | |
+| duplicate_order | |
 
 **Policy**: Refunds are granted for product-related issues only. Reasons like "I changed my mind" or "found it cheaper elsewhere" are not valid grounds for a refund.
 
@@ -306,13 +325,18 @@ approval (see `backend/app/refund_approvals.py`):
     {"product_id": "PROD-001", "name": "Pro Laptop", "qty": 1, "price": 1199.99}
   ],
   "refund_amount": 1199.99,
-  "reason": "Defective screen",
+  "reason": "Product quality below expectations",
   "reason_category": "quality_issue",
   "status": "PENDING_APPROVAL",
   "requested_at": "2026-01-15T10:30:00+00:00",
   "expires_at": "2026-01-18T10:30:00+00:00"
 }
 ```
+
+`reason` is the policy's label for whatever `reason_code` the agent passed
+to `process_refund()` (`reason_category` is the code itself) — not free
+text the user typed. Field names are kept exactly as before so
+`backend/app/refund_approvals.py` and the approver UI need no changes.
 
 ### Example Refund Record (`refunds`, written after human approval)
 
@@ -326,7 +350,7 @@ approval (see `backend/app/refund_approvals.py`):
     {"product_id": "PROD-001", "name": "Pro Laptop", "qty": 1, "price": 1199.99}
   ],
   "total_refund_amount": 1199.99,
-  "reason": "Defective screen",
+  "reason": "Product quality below expectations",
   "created_at": "2026-01-15T10:30:00"
 }
 ```

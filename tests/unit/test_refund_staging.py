@@ -56,7 +56,7 @@ class TestRefundStaging:
     def test_valid_refund_is_staged_not_executed(self, mock_tool_context):
         from customer_support_mas.agents.refund.tools import process_refund
 
-        result = process_refund("ORD-12345", "item arrived damaged", mock_tool_context)
+        result = process_refund("ORD-12345", "damaged", mock_tool_context)
 
         assert result["status"] == "pending_approval"
         assert result["request_id"]
@@ -82,7 +82,7 @@ class TestRefundStaging:
     def test_unacceptable_reason_still_rejected_before_staging(self, mock_tool_context):
         from customer_support_mas.agents.refund.tools import process_refund
 
-        result = process_refund("ORD-12345", "changed my mind", mock_tool_context)
+        result = process_refund("ORD-12345", "changed_mind", mock_tool_context)
 
         assert result["status"] == "reason_not_acceptable"
 
@@ -93,8 +93,8 @@ class TestRefundStaging:
     def test_duplicate_staging_is_idempotent(self, mock_tool_context):
         from customer_support_mas.agents.refund.tools import process_refund
 
-        first = process_refund("ORD-12345", "item arrived damaged", mock_tool_context)
-        second = process_refund("ORD-12345", "item arrived damaged", mock_tool_context)
+        first = process_refund("ORD-12345", "damaged", mock_tool_context)
+        second = process_refund("ORD-12345", "damaged", mock_tool_context)
 
         assert first["status"] == "pending_approval"
         assert second["status"] == "already_pending"
@@ -107,7 +107,7 @@ class TestRefundStaging:
         """Ownership/validation checks still run before any staging occurs."""
         from customer_support_mas.agents.refund.tools import process_refund
 
-        result = process_refund("ORD-99999", "item arrived damaged", mock_tool_context)
+        result = process_refund("ORD-99999", "damaged", mock_tool_context)
 
         assert result["status"] == "error"
 

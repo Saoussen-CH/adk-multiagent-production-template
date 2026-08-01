@@ -43,7 +43,7 @@ For full details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 | Feature | Implementation | Notes |
 |---------|----------------|-------|
 | Multi-Agent Orchestration | Root + 3 Specialists + Workflow agents | Cost-optimized with Gemini 2.5 Pro + Flash |
-| Sequential Workflows | 3-step refund validation pipeline | Validation gates prevent invalid operations |
+| Sequential Workflows | 3-step refund pipeline with human-in-the-loop approval | LLM only *stages* a refund; a human approves (dual control) before deterministic code executes it |
 | Session Management | Vertex AI Agent Engine sessions | Backend proxy with JWT auth + multi-user support |
 | Memory Bank | Vertex AI Memory Bank with callbacks | Cross-session preference recall |
 | Observability | LoggingPlugin + Cloud Logging | Production-ready monitoring |
@@ -70,12 +70,13 @@ User message
             └─► Refund Workflow (SequentialAgent)
                     ├─► Step 1: Validate order
                     ├─► Step 2: Check eligibility
-                    └─► Step 3: Process refund
+                    └─► Step 3: Stage refund for human approval
+                            └─► Approver reviews (admin UI) → deterministic execution
 ```
 
 **Product Agent** defaults to `get_product_info` — a smart unified tool that fetches details + inventory + reviews in one call. Individual tools (`get_product_details`, `check_inventory`, `get_product_reviews`) are only used when the user explicitly requests specific data.
 
-**Refund Workflow** is a `SequentialAgent` — the only path to process a refund. Each step must pass before the next runs, preventing invalid refunds.
+**Refund Workflow** is a `SequentialAgent` — the only path to a refund, and the LLM never executes one directly. Step 3 stages a `PENDING_APPROVAL` request; a human approver reviews it in the admin UI (dual control — requester ≠ approver), and only then does deterministic backend code execute the refund in a Firestore transaction.
 
 ---
 
