@@ -85,11 +85,11 @@ def mock_tool_context_user2():
 class TestProductTools:
     """Test product-related tools."""
 
-    def test_search_products_laptops(self, mock_tool_context):
+    def test_search_products_laptops(self, mock_tool_context_with_tenant):
         """Test searching for laptops returns results."""
         from customer_support_mas.agents.product.tools import search_products
 
-        result = search_products(query="laptops", tool_context=mock_tool_context)
+        result = search_products(query="laptops", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
         assert result["count"] > 0
@@ -99,28 +99,28 @@ class TestProductTools:
         product_names = [p["name"].lower() for p in result["products"]]
         assert any("laptop" in name for name in product_names)
 
-    def test_search_products_with_price_filter(self, mock_tool_context):
+    def test_search_products_with_price_filter(self, mock_tool_context_with_tenant):
         """Test search filters by price when mentioned."""
         from customer_support_mas.agents.product.tools import search_products
 
-        result = search_products(query="laptops under $600", tool_context=mock_tool_context)
+        result = search_products(query="laptops under $600", tool_context=mock_tool_context_with_tenant)
 
         # No laptops under $600 in seed data, so RAG returns empty → falls back to keyword
         assert result["status"] in ["success", "no_results"]
 
-    def test_search_products_no_results(self, mock_tool_context):
+    def test_search_products_no_results(self, mock_tool_context_with_tenant):
         """Test search with no matching products."""
         from customer_support_mas.agents.product.tools import search_products
 
-        result = search_products(query="xyz123nonexistent", tool_context=mock_tool_context)
+        result = search_products(query="xyz123nonexistent", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "no_results"
 
-    def test_get_product_details_valid(self):
+    def test_get_product_details_valid(self, mock_tool_context_with_tenant):
         """Test getting details for valid product."""
         from customer_support_mas.agents.product.tools import get_product_details
 
-        result = get_product_details(product_id="PROD-001")
+        result = get_product_details(product_id="PROD-001", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
         assert "product" in result
@@ -128,27 +128,27 @@ class TestProductTools:
         assert "name" in result["product"]
         assert "price" in result["product"]
 
-    def test_get_product_details_invalid(self):
+    def test_get_product_details_invalid(self, mock_tool_context_with_tenant):
         """Test getting details for non-existent product."""
         from customer_support_mas.agents.product.tools import get_product_details
 
-        result = get_product_details(product_id="PROD-99999")
+        result = get_product_details(product_id="PROD-99999", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] in ["error", "not_found"]
 
-    def test_check_inventory_valid(self):
+    def test_check_inventory_valid(self, mock_tool_context_with_tenant):
         """Test checking inventory for valid product."""
         from customer_support_mas.agents.product.tools import check_inventory
 
-        result = check_inventory(product_id="PROD-001")
+        result = check_inventory(product_id="PROD-001", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
 
-    def test_get_product_reviews(self):
+    def test_get_product_reviews(self, mock_tool_context_with_tenant):
         """Test getting reviews for a product."""
         from customer_support_mas.agents.product.tools import get_product_reviews
 
-        result = get_product_reviews(product_id="PROD-001")
+        result = get_product_reviews(product_id="PROD-001", tool_context=mock_tool_context_with_tenant)
 
         # Reviews may or may not exist
         assert result["status"] in ["success", "error", "not_found"]
@@ -210,38 +210,38 @@ class TestOrderTools:
 class TestBillingTools:
     """Test billing-related tools."""
 
-    def test_get_invoice_valid(self, mock_tool_context):
+    def test_get_invoice_valid(self, mock_tool_context_with_tenant):
         """Test getting a valid invoice."""
         from customer_support_mas.agents.billing.tools import get_invoice
 
-        result = get_invoice(invoice_id="INV-2025-001", tool_context=mock_tool_context)
+        result = get_invoice(invoice_id="INV-2025-001", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
         assert "invoice" in result
         assert result["invoice"]["invoice_id"] == "INV-2025-001"
 
-    def test_get_invoice_invalid(self, mock_tool_context):
+    def test_get_invoice_invalid(self, mock_tool_context_with_tenant):
         """Test getting a non-existent invoice."""
         from customer_support_mas.agents.billing.tools import get_invoice
 
-        result = get_invoice(invoice_id="INV-9999-999", tool_context=mock_tool_context)
+        result = get_invoice(invoice_id="INV-9999-999", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] in ["error", "not_found"]
 
-    def test_get_invoice_by_order_id(self, mock_tool_context):
+    def test_get_invoice_by_order_id(self, mock_tool_context_with_tenant):
         """Test getting invoice by order ID."""
         from customer_support_mas.agents.billing.tools import get_invoice_by_order_id
 
-        result = get_invoice_by_order_id(order_id="ORD-12345", tool_context=mock_tool_context)
+        result = get_invoice_by_order_id(order_id="ORD-12345", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
         assert "invoice" in result
 
-    def test_check_payment_status(self, mock_tool_context):
+    def test_check_payment_status(self, mock_tool_context_with_tenant):
         """Test checking payment status."""
         from customer_support_mas.agents.billing.tools import check_payment_status
 
-        result = check_payment_status(order_id="ORD-12345", tool_context=mock_tool_context)
+        result = check_payment_status(order_id="ORD-12345", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
 

@@ -8,30 +8,16 @@ import logging
 
 from google.adk.tools.tool_context import ToolContext
 
-logger = logging.getLogger(__name__)
-
-# Import database client
-from customer_support_mas.database import db_client  # noqa: E402
-
-# Import error handling
-from customer_support_mas.error_handling import tool_error_handler  # noqa: E402
-
-# Import validation utilities
-from customer_support_mas.validation import (  # noqa: E402
+from customer_support_mas.error_handling import tool_error_handler
+from customer_support_mas.providers.registry import get_provider
+from customer_support_mas.tenancy.context import get_tenant_id
+from customer_support_mas.validation import (
     validate_product_id,
     validate_search_query,
     validation_error_response,
 )
 
-# Import RAG search
-try:
-    from customer_support_mas.services import get_rag_search
-
-    USE_RAG = True
-    logger.debug("RAG search enabled in product_tools")
-except Exception as e:
-    logger.debug("RAG search not available in product_tools: %s", e)
-    USE_RAG = False
+logger = logging.getLogger(__name__)
 
 
 @tool_error_handler
@@ -44,97 +30,64 @@ def search_products(query: str, tool_context: ToolContext) -> dict:
         query: Search query string
         tool_context: ADK ToolContext (automatically injected)
     """
-    # Input validation
     is_valid, error_msg = validate_search_query(query)
     if not is_valid:
         return validation_error_response(error_msg)
 
-    if USE_RAG:
-        # Use RAG semantic search
-        try:
-            rag = get_rag_search()
-            products = rag.search(query, limit=5)
+    tenant_id = get_tenant_id(tool_context)
+    provider = get_provider(tenant_id)
+    products = provider.search_products(tenant_id, query, limit=5)
 
-            if products:
-                # Save first product to persistent session state
-                if len(products) > 0 and "id" in products[0]:
-                    tool_context.state["last_product_id"] = products[0]["id"]
-                    tool_context.state["last_product_name"] = products[0].get("name", "")
-                    tool_context.state["last_search_query"] = query
-                    logger.debug("Session state saved: %s - %s", products[0]["id"], products[0].get("name"))
+    if not products:
+        return {"status": "no_results", "message": f"No products found matching '{query}'"}
 
-                # Save ALL product IDs for multi-product details loop
-                product_ids = [p["id"] for p in products if "id" in p]
-                tool_context.state["products_to_detail"] = product_ids
-                tool_context.state["detailed_product_ids"] = []  # Reset for new search
-                logger.debug("Saved %d product IDs for multi-detail: %s", len(product_ids), product_ids)
+    results = [
+        {"id": p.product_id, "name": p.name, "price": p.price, "category": p.category, "description": p.description}
+        for p in products
+    ]
 
-                return {"status": "success", "products": products, "count": len(products), "method": "RAG"}
-            # RAG returned empty - fall through to keyword search
-            logger.debug("RAG returned no results, falling back to keyword search")
+    tool_context.state["last_product_id"] = results[0]["id"]
+    tool_context.state["last_product_name"] = results[0]["name"]
+    tool_context.state["last_search_query"] = query
+    logger.debug("Session state saved: %s - %s", results[0]["id"], results[0]["name"])
 
-        except Exception as e:
-            logger.warning("RAG search failed: %s, falling back to keyword", e)
+    product_ids = [p["id"] for p in results]
+    tool_context.state["products_to_detail"] = product_ids
+    tool_context.state["detailed_product_ids"] = []
+    logger.debug("Saved %d product IDs for multi-detail: %s", len(product_ids), product_ids)
 
-    # Fallback: keyword search with plural/singular handling
-    results = []
-    query_lower = query.lower().strip()
-    search_terms = [query_lower]
-    if query_lower.endswith("s"):
-        search_terms.append(query_lower[:-1])
-    else:
-        search_terms.append(query_lower + "s")
-
-    for doc in db_client.collection("products").stream():
-        data = doc.to_dict()
-        name = data.get("name", "").lower()
-        category = data.get("category", "").lower()
-        keywords = data.get("keywords", [])
-
-        match = any(term in name or term in category or term in keywords for term in search_terms)
-
-        if match:
-            results.append(
-                {"id": doc.id, "name": data.get("name"), "price": data.get("price"), "category": data.get("category")}
-            )
-
-    if results:
-        # Save first result to persistent session state
-        if len(results) > 0:
-            tool_context.state["last_product_id"] = results[0]["id"]
-            tool_context.state["last_product_name"] = results[0]["name"]
-            tool_context.state["last_search_query"] = query
-            logger.debug("Session state saved: %s - %s", results[0]["id"], results[0]["name"])
-
-        # Save ALL product IDs for multi-product details loop
-        product_ids = [p["id"] for p in results if "id" in p]
-        tool_context.state["products_to_detail"] = product_ids
-        tool_context.state["detailed_product_ids"] = []  # Reset for new search
-        logger.debug("Saved %d product IDs for multi-detail: %s", len(product_ids), product_ids)
-
-        return {"status": "success", "products": results, "count": len(results), "method": "keyword"}
-    return {"status": "no_results", "message": f"No products found matching '{query}'"}
+    return {"status": "success", "products": results, "count": len(results)}
 
 
 @tool_error_handler
-def get_product_details(product_id: str) -> dict:
+def get_product_details(product_id: str, tool_context: ToolContext) -> dict:
     """Get detailed information about a specific product by its ID.
 
     Args:
         product_id: The product ID (e.g., "PROD-001")
+        tool_context: ADK ToolContext (automatically injected)
     """
-    # Input validation
     is_valid, error_msg = validate_product_id(product_id)
     if not is_valid:
         return validation_error_response(error_msg)
 
-    doc = db_client.collection("products").document(product_id).get()
-    if doc.exists:
-        data = doc.to_dict()
-        # Remove embedding from response (too large)
-        data.pop("embedding", None)
-        return {"status": "success", "product": {"id": doc.id, **data}}
-    return {"status": "not_found", "message": f"Product {product_id} not found"}
+    tenant_id = get_tenant_id(tool_context)
+    provider = get_provider(tenant_id)
+    product = provider.get_product(tenant_id, product_id)
+
+    if product is None:
+        return {"status": "not_found", "message": f"Product {product_id} not found"}
+
+    return {
+        "status": "success",
+        "product": {
+            "id": product.product_id,
+            "name": product.name,
+            "price": product.price,
+            "description": product.description,
+            "category": product.category,
+        },
+    }
 
 
 @tool_error_handler
@@ -159,54 +112,68 @@ def get_last_mentioned_product(tool_context: ToolContext) -> dict:
     if not last_product_id:
         return {"status": "error", "message": "No product was recently discussed. Please search for a product first."}
 
-    # Fetch the product details
-    doc = db_client.collection("products").document(last_product_id).get()
-    if doc.exists:
-        data = doc.to_dict()
-        data.pop("embedding", None)
-        return {
-            "status": "success",
-            "product": {"id": doc.id, **data},
-            "context_note": f"This is the {last_product_name} you asked about.",
-        }
+    tenant_id = get_tenant_id(tool_context)
+    provider = get_provider(tenant_id)
+    product = provider.get_product(tenant_id, last_product_id)
 
-    return {"status": "not_found", "message": f"Product {last_product_id} not found"}
+    if product is None:
+        return {"status": "not_found", "message": f"Product {last_product_id} not found"}
+
+    return {
+        "status": "success",
+        "product": {
+            "id": product.product_id,
+            "name": product.name,
+            "price": product.price,
+            "description": product.description,
+            "category": product.category,
+        },
+        "context_note": f"This is the {last_product_name} you asked about.",
+    }
 
 
 @tool_error_handler
-def check_inventory(product_id: str) -> dict:
+def check_inventory(product_id: str, tool_context: ToolContext) -> dict:
     """Check inventory levels.
 
     Args:
         product_id: The product ID to check inventory for
+        tool_context: ADK ToolContext (automatically injected)
     """
-    # Input validation
     is_valid, error_msg = validate_product_id(product_id)
     if not is_valid:
         return validation_error_response(error_msg)
 
-    doc = db_client.collection("inventory").document(product_id).get()
-    if doc.exists:
-        return {"status": "success", "inventory": {"product_id": doc.id, **doc.to_dict()}}
-    return {"status": "not_found"}
+    tenant_id = get_tenant_id(tool_context)
+    provider = get_provider(tenant_id)
+    quantity = provider.get_inventory(tenant_id, product_id)
+
+    if quantity is None:
+        return {"status": "not_found", "message": f"No inventory record for product {product_id}"}
+
+    return {"status": "success", "inventory": {"product_id": product_id, "quantity": quantity}}
 
 
 @tool_error_handler
-def get_product_reviews(product_id: str) -> dict:
+def get_product_reviews(product_id: str, tool_context: ToolContext) -> dict:
     """Get customer reviews for a product.
 
     Args:
         product_id: The product ID to get reviews for
+        tool_context: ADK ToolContext (automatically injected)
     """
-    # Input validation
     is_valid, error_msg = validate_product_id(product_id)
     if not is_valid:
         return validation_error_response(error_msg)
 
-    doc = db_client.collection("reviews").document(product_id).get()
-    if doc.exists:
-        return {"status": "success", "reviews": {"product_id": doc.id, **doc.to_dict()}}
-    return {"status": "not_found"}
+    tenant_id = get_tenant_id(tool_context)
+    provider = get_provider(tenant_id)
+    reviews = provider.get_reviews_for_product(tenant_id, product_id)
+
+    if not reviews:
+        return {"status": "not_found"}
+
+    return {"status": "success", "reviews": {"product_id": product_id, **reviews[0]}}
 
 
 @tool_error_handler
@@ -241,7 +208,7 @@ def get_all_saved_products_info(tool_context: ToolContext) -> dict:
 
     # Fetch comprehensive info for each product
     for product_id in products_to_detail:
-        product_info = get_product_info(product_id)
+        product_info = get_product_info(product_id, tool_context)
         if product_info.get("status") == "success":
             results["products"].append(product_info)
         else:
@@ -256,7 +223,11 @@ def get_all_saved_products_info(tool_context: ToolContext) -> dict:
 
 @tool_error_handler
 def get_product_info(
-    product_id: str, include_details: bool = True, include_inventory: bool = True, include_reviews: bool = True
+    product_id: str,
+    tool_context: ToolContext,
+    include_details: bool = True,
+    include_inventory: bool = True,
+    include_reviews: bool = True,
 ) -> dict:
     """
     Smart unified product information fetcher with automatic comprehensive data retrieval.
@@ -276,6 +247,7 @@ def get_product_info(
 
     Args:
         product_id: The product ID (e.g., "PROD-001")
+        tool_context: ADK ToolContext (automatically injected)
         include_details: Whether to fetch product details (default: True)
         include_inventory: Whether to fetch inventory levels (default: True)
         include_reviews: Whether to fetch customer reviews (default: True)
@@ -295,7 +267,7 @@ def get_product_info(
 
     # Fetch details
     if include_details:
-        details = get_product_details(product_id)
+        details = get_product_details(product_id, tool_context)
         if details.get("status") == "success":
             result["details"] = details.get("product", {})
             result["data_fetched"].append("details")
@@ -304,7 +276,7 @@ def get_product_info(
 
     # Fetch inventory
     if include_inventory:
-        inventory = check_inventory(product_id)
+        inventory = check_inventory(product_id, tool_context)
         if inventory.get("status") == "success":
             result["inventory"] = inventory.get("inventory", {})
             result["data_fetched"].append("inventory")
@@ -313,7 +285,7 @@ def get_product_info(
 
     # Fetch reviews
     if include_reviews:
-        reviews = get_product_reviews(product_id)
+        reviews = get_product_reviews(product_id, tool_context)
         if reviews.get("status") == "success":
             result["reviews"] = reviews.get("reviews", {})
             result["data_fetched"].append("reviews")

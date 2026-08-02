@@ -101,7 +101,7 @@ class FirestoreProvider:
         doc = self._db.collection("inventory").document(product_id).get()
         if not doc.exists:
             return None
-        return doc.to_dict().get("quantity")
+        return doc.to_dict().get("total_stock")
 
     def get_invoice(self, tenant_id: str, invoice_id: str) -> Optional[Invoice]:
         doc = self._db.collection("invoices").document(invoice_id).get()
@@ -133,6 +133,17 @@ class FirestoreProvider:
     def list_refunds_for_order(self, tenant_id: str, order_id: str) -> list[dict]:
         query = self._db.collection("refunds").where("order_id", "==", order_id)
         return [doc.to_dict() for doc in query.stream()]
+
+    def get_reviews_for_product(self, tenant_id: str, product_id: str) -> list[dict]:
+        """The `reviews` collection stores one summary document per product
+        (keyed by product_id), not a queryable-by-foreign-key collection —
+        unlike list_refunds_for_order there's no `.where()` here, just a
+        by-ID lookup. Wrapped in a list (empty when absent) to match the
+        list[dict] shape the rest of the raw-dict provider methods use."""
+        doc = self._db.collection("reviews").document(product_id).get()
+        if not doc.exists:
+            return []
+        return [doc.to_dict()]
 
     def search_products(self, tenant_id: str, query: str, limit: int = 5) -> list[Product]:
         """RAG (semantic) search scoped to this tenant's database, with a

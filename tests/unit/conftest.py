@@ -191,8 +191,6 @@ def mock_backends(mock_db):
         patch("customer_support_mas.database.get_db_client", return_value=mock_db),
         patch("customer_support_mas.database.client.get_db_client", return_value=mock_db),
         patch("customer_support_mas.database.client.db_client", mock_db),
-        patch("customer_support_mas.agents.product.tools.db_client", mock_db),
-        patch("customer_support_mas.agents.billing.tools.db_client", mock_db),
         patch("customer_support_mas.agents.refund.tools.db_client", mock_db),
         patch("customer_support_mas.providers.firestore_provider.get_db_client", return_value=mock_db),
         patch("customer_support_mas.tenancy.config.get_db_client", return_value=mock_db),
@@ -200,8 +198,6 @@ def mock_backends(mock_db):
         patch.dict("customer_support_mas.services.rag_search._rag_search_instances", {"customer-support-db": mock_rag}),
         patch("customer_support_mas.services.rag_search.get_rag_search", return_value=mock_rag),
         patch("customer_support_mas.services.get_rag_search", return_value=mock_rag),
-        patch("customer_support_mas.agents.product.tools.get_rag_search", return_value=mock_rag),
-        patch("customer_support_mas.agents.product.tools.USE_RAG", True),
     ]
     for p in backend_patches:
         p.start()

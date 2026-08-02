@@ -69,13 +69,11 @@ def mock_db():
         patch("customer_support_mas.database.client.get_db_client", return_value=mock_client),
         patch("customer_support_mas.database.client.db_client", mock_client),
     ):
-        # Also patch in the tools modules that import db_client at the top
-        with (
-            patch("customer_support_mas.agents.product.tools.db_client", mock_client),
-            patch("customer_support_mas.agents.order.tools.db_client", mock_client),
-            patch("customer_support_mas.agents.billing.tools.db_client", mock_client),
-            patch("customer_support_mas.agents.refund.tools.db_client", mock_client),
-        ):
+        # Also patch in the tools modules that import db_client at the top.
+        # product/order/billing tools no longer import db_client directly
+        # (routed through CommerceProvider instead — Tasks 4/5); only
+        # refund/tools.py still does (Task 6's scope).
+        with patch("customer_support_mas.agents.refund.tools.db_client", mock_client):
             yield mock_client
 
 
@@ -91,8 +89,6 @@ def mock_rag():
         patch.dict("customer_support_mas.services.rag_search._rag_search_instances", {"customer-support-db": mock_instance}),
         patch("customer_support_mas.services.rag_search.get_rag_search", return_value=mock_instance),
         patch("customer_support_mas.services.get_rag_search", return_value=mock_instance),
-        patch("customer_support_mas.agents.product.tools.get_rag_search", return_value=mock_instance),
-        patch("customer_support_mas.agents.product.tools.USE_RAG", True),
     ):
         yield
 
