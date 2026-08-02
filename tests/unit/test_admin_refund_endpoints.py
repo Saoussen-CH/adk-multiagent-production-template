@@ -71,10 +71,16 @@ client = TestClient(app)
 def _stage_pending(db, order_id="ORD-12345", user_id="demo-user-001"):
     """Write a PENDING_APPROVAL refund_requests doc directly into the mock,
     mirroring what Task 8's process_refund stages. Returns the request_id.
+
+    Includes "tenant_id" (Task 6+7): approve_refund now reads
+    request["tenant_id"] to resolve the tenant's CommerceProvider before
+    executing the refund, so a staged doc without it raises KeyError before
+    ever reaching the dual-control/idempotency logic under test here.
     """
     request_id = f"REFREQ-{order_id}"
     db.collection("refund_requests").document(request_id).set(
         {
+            "tenant_id": "test-tenant",
             "order_id": order_id,
             "user_id": user_id,
             "items": [{"item_id": "ITEM-1", "product_id": "ITEM-1", "price": 49.99}],
