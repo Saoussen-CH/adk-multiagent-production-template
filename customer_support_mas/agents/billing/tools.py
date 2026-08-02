@@ -142,3 +142,17 @@ def get_my_payments(tool_context: ToolContext, _user_id: str = None, **kwargs) -
 
     logger.info(f"[BILLING] No payments found for user {_user_id}")
     return {"status": "no_payments", "message": "No payment records found for your account."}
+
+
+# =============================================================================
+# REFUND INFO TOOLS (delegate to refund.tools, tenant-scoped)
+# =============================================================================
+
+
+@tool_error_handler
+def get_acceptable_refund_reasons(tool_context: ToolContext) -> dict:
+    """List acceptable and unacceptable refund reasons."""
+    tenant_id = get_tenant_id(tool_context)
+    from customer_support_mas.agents.refund.tools import get_acceptable_refund_reasons as _get_reasons
+
+    return _get_reasons(tenant_id)

@@ -10,15 +10,18 @@ fixture available repo-wide). Neither exists as written in this repo:
 - `mock_tool_context` (a MagicMock ToolContext for demo-user-001) is defined
   locally in tests/unit/test_tools.py, not in conftest.py, so it is
   redefined here identically (pytest fixtures are not visible across files
-  unless declared in a conftest.py).
+  unless declared in a conftest.py). Since Task 6 (multi-tenant), it also
+  carries `state["tenant_id"] = "test-tenant"` — every refund tool now
+  resolves tenant_id via customer_support_mas.tenancy.context.get_tenant_id
+  and fails hard without it (no default/implicit tenant).
 - The session-scoped `mock_db` fixture (tests/conftest.py) is a *different*
-  MockFirestoreClient instance than the one actually patched into
-  `customer_support_mas.agents.refund.tools.db_client` during each test
-  (a fresh instance created per-test by the autouse `mock_backends` fixture
-  in tests/unit/conftest.py - verified empirically: the two fixtures resolve
-  to different object ids). Reading staged Firestore state therefore goes
-  through the tools module's live `db_client` attribute, which always
-  reflects whatever mock is actually active for the running test.
+  MockFirestoreClient instance than the one actually patched in during each
+  test (a fresh instance created per-test by the autouse `mock_backends`
+  fixture in tests/unit/conftest.py - verified empirically: the two
+  fixtures resolve to different object ids). Reading staged Firestore state
+  therefore goes through the same path process_refund itself uses -
+  `get_provider(tenant_id)._db` (Task 6) - which always reflects whatever
+  mock is actually active for the running test.
 """
 
 from unittest.mock import MagicMock
@@ -37,17 +40,17 @@ def mock_tool_context():
     standalone target for these staging tests.
     """
     mock_ctx = MagicMock()
-    mock_ctx.state = {}
+    mock_ctx.state = {"tenant_id": "test-tenant"}
     mock_ctx.user_id = "demo-user-001"
     mock_ctx.actions = MagicMock()
     return mock_ctx
 
 
 def _active_db_client():
-    """Return the Firestore mock currently patched into the refund tools module."""
-    from customer_support_mas.agents.refund import tools as refund_tools
+    """Return the Firestore mock actually used by refund/tools.py for "test-tenant"."""
+    from customer_support_mas.providers.registry import get_provider
 
-    return refund_tools.db_client
+    return get_provider("test-tenant")._db
 
 
 class TestRefundStaging:

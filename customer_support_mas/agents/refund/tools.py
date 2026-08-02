@@ -20,8 +20,9 @@ from google.adk.tools.tool_context import ToolContext
 
 from customer_support_mas.agents.refund.policy import get_active_policy, get_reason_code
 from customer_support_mas.auth import audit_log, verify_order_ownership
-from customer_support_mas.database import db_client
 from customer_support_mas.error_handling import tool_error_handler
+from customer_support_mas.providers.registry import get_provider
+from customer_support_mas.tenancy.context import get_tenant_id
 from customer_support_mas.validation import (
     validate_order_id,
     validation_error_response,
@@ -45,15 +46,15 @@ def _parse_date(date_str: str) -> Optional[datetime]:
         return None
 
 
-def _get_existing_refunds(order_id: str) -> List[dict]:
+def _get_existing_refunds(tenant_id: str, order_id: str) -> List[dict]:
     """Get all existing refunds for an order."""
-    query = db_client.collection("refunds").where("order_id", "==", order_id)
-    return [doc.to_dict() for doc in query.stream()]
+    provider = get_provider(tenant_id)
+    return provider.list_refunds_for_order(tenant_id, order_id)
 
 
-def _get_refunded_item_ids(order_id: str) -> set:
+def _get_refunded_item_ids(tenant_id: str, order_id: str) -> set:
     """Get set of product IDs that have already been refunded for this order."""
-    refunds = _get_existing_refunds(order_id)
+    refunds = _get_existing_refunds(tenant_id, order_id)
     refunded_ids = set()
     for refund in refunds:
         if refund.get("status") != "cancelled":  # Don't count cancelled refunds
@@ -95,14 +96,14 @@ def _calculate_refund_amount(items: List[dict]) -> float:
     return round(total, 2)
 
 
-def get_acceptable_refund_reasons() -> dict:
+def get_acceptable_refund_reasons(tenant_id: str) -> dict:
     """Return the current policy's refund reason codes for display to users.
 
     The reason taxonomy is policy config (customer_support_mas/agents/refund/policy.py),
     not a hardcoded list — this always reflects whatever policy version is
-    active today.
+    active today for this tenant.
     """
-    policy = get_active_policy()
+    policy = get_active_policy(tenant_id)
     reason_codes = policy["reason_codes"]
     return {
         "acceptable": {r["code"]: r["label"] for r in reason_codes if r["eligible"]},
@@ -140,11 +141,14 @@ def validate_refund_request(order_id: str, tool_context: ToolContext, item_ids: 
     if not is_valid:
         return validation_error_response(error_msg)
 
+    tenant_id = get_tenant_id(tool_context)
     user_id = tool_context.user_id
     logger.info(f"[Refund Workflow - Step 1] User {user_id} validating refund for order: {order_id}")
 
     # Verify ownership
-    is_authorized, order_data, error_msg = verify_order_ownership(order_id, user_id, action="validate_refund_request")
+    is_authorized, order_data, error_msg = verify_order_ownership(
+        order_id, user_id, tenant_id, action="validate_refund_request"
+    )
 
     if not is_authorized:
         logger.warning(f"[Refund Workflow - Step 1] STOPPING - {error_msg}")
@@ -240,11 +244,14 @@ def check_refund_eligibility(order_id: str, tool_context: ToolContext) -> dict:
     if not is_valid:
         return validation_error_response(error_msg)
 
+    tenant_id = get_tenant_id(tool_context)
     user_id = tool_context.user_id
     logger.info(f"[Refund Workflow - Step 2] Checking eligibility for order: {order_id}")
 
     # Re-verify ownership (defense in depth)
-    is_authorized, order_data, error_msg = verify_order_ownership(order_id, user_id, action="check_refund_eligibility")
+    is_authorized, order_data, error_msg = verify_order_ownership(
+        order_id, user_id, tenant_id, action="check_refund_eligibility"
+    )
 
     if not is_authorized:
         logger.warning(f"[Refund Workflow - Step 2] STOPPING - {error_msg}")
@@ -272,7 +279,7 @@ def check_refund_eligibility(order_id: str, tool_context: ToolContext) -> dict:
 
     # Judge this order by the policy version in effect when it was delivered,
     # not whatever the policy happens to be today.
-    policy = get_active_policy(as_of=delivered_date.strftime("%Y-%m-%d"))
+    policy = get_active_policy(tenant_id, as_of=delivered_date.strftime("%Y-%m-%d"))
     window_days = policy["window_days"]
 
     days_since_delivery = (datetime.now() - delivered_date).days
@@ -292,7 +299,7 @@ def check_refund_eligibility(order_id: str, tool_context: ToolContext) -> dict:
         }
 
     # Check 2: Items not already refunded
-    already_refunded_ids = _get_refunded_item_ids(order_id)
+    already_refunded_ids = _get_refunded_item_ids(tenant_id, order_id)
     eligible_items = []
     already_refunded_items = []
 
@@ -355,7 +362,7 @@ def process_refund(order_id: str, reason_code: str, tool_context: ToolContext) -
     finalize. It:
     - Validates reason_code is a recognized, eligible policy reason code
     - Records the specific items and refund amount being requested
-    - Prevents duplicate staging (idempotent per order+user)
+    - Prevents duplicate staging (idempotent per tenant+order+user)
 
     reason_code is a fixed code from the active refund policy
     (customer_support_mas/agents/refund/policy.py), not free text — call
@@ -383,12 +390,13 @@ def process_refund(order_id: str, reason_code: str, tool_context: ToolContext) -
     if not reason_code or not isinstance(reason_code, str):
         return validation_error_response("reason_code is required")
 
+    tenant_id = get_tenant_id(tool_context)
     user_id = tool_context.user_id
     logger.info(f"[Refund Workflow - Step 3] Processing refund for order: {order_id}, reason_code: {reason_code}")
 
     # Validate reason_code against the active policy FIRST (before any other
     # processing) — cheap, no order data needed yet.
-    policy = get_active_policy()
+    policy = get_active_policy(tenant_id)
     reason_info = get_reason_code(policy, reason_code)
 
     if reason_info is None:
@@ -414,7 +422,7 @@ def process_refund(order_id: str, reason_code: str, tool_context: ToolContext) -
     logger.info(f"[Refund Workflow - Step 3] Reason accepted: {reason_code}")
 
     # Final ownership verification
-    is_authorized, order_data, error_msg = verify_order_ownership(order_id, user_id, action="process_refund")
+    is_authorized, order_data, error_msg = verify_order_ownership(order_id, user_id, tenant_id, action="process_refund")
 
     if not is_authorized:
         logger.error(f"[Refund Workflow - Step 3] BLOCKED - {error_msg}")
@@ -432,7 +440,7 @@ def process_refund(order_id: str, reason_code: str, tool_context: ToolContext) -
         refund_amount = _calculate_refund_amount(eligible_items)
 
         # Check for already refunded items
-        already_refunded_ids = _get_refunded_item_ids(order_id)
+        already_refunded_ids = _get_refunded_item_ids(tenant_id, order_id)
         eligible_items = [i for i in eligible_items if i["product_id"] not in already_refunded_ids]
 
         if not eligible_items:
@@ -441,15 +449,28 @@ def process_refund(order_id: str, reason_code: str, tool_context: ToolContext) -
 
         refund_amount = _calculate_refund_amount(eligible_items)
 
-    # Idempotency check: don't stage a second request while one is already pending
-    # for this (order, user). MockCollection/real Firestore both support a single
-    # .where() call reliably; a second chained .where() is not supported by the
-    # mock, so we filter user_id/status in Python after a single-field query.
-    existing_docs = list(db_client.collection("refund_requests").where("order_id", "==", order_id).stream())
+    # refund_requests staging stays direct Firestore access (not a
+    # CommerceProvider concern — refund staging is this product's own
+    # workflow layer) but must resolve to the *tenant's* Firestore database,
+    # same narrow exception as policy.py.
+    provider = get_provider(tenant_id)
+    db = provider._db
+
+    # Idempotency check: don't stage a second request while one is already
+    # pending for this (tenant, order, user). MockCollection/real Firestore
+    # both support a single .where() call reliably; a second chained
+    # .where() is not supported by the mock, so we filter tenant_id/user_id/
+    # status in Python after a single-field query. Filtering by tenant_id
+    # too (not just order_id+user_id+status) matters because order_id is
+    # only unique within a tenant — a different tenant could have an
+    # identical order_id and this must never match across tenants.
+    existing_docs = list(db.collection("refund_requests").where("order_id", "==", order_id).stream())
     existing_pending = [
         d
         for d in existing_docs
-        if d.to_dict().get("user_id") == user_id and d.to_dict().get("status") == "PENDING_APPROVAL"
+        if d.to_dict().get("tenant_id") == tenant_id
+        and d.to_dict().get("user_id") == user_id
+        and d.to_dict().get("status") == "PENDING_APPROVAL"
     ]
     if existing_pending:
         doc = existing_pending[0]
@@ -468,6 +489,7 @@ def process_refund(order_id: str, reason_code: str, tool_context: ToolContext) -
 
     now = datetime.now(timezone.utc)
     request_doc = {
+        "tenant_id": tenant_id,
         "order_id": order_id,
         "user_id": user_id,
         "items": eligible_items,
@@ -483,7 +505,7 @@ def process_refund(order_id: str, reason_code: str, tool_context: ToolContext) -
         "expires_at": (now + timedelta(hours=72)).isoformat(),
     }
 
-    db_client.collection("refund_requests").document(request_id).set(request_doc)
+    db.collection("refund_requests").document(request_id).set(request_doc)
 
     audit_log(user_id, "stage_refund", "order", order_id, True, f"staged {request_id} for ${refund_amount}")
 
@@ -535,11 +557,14 @@ def check_if_refundable(order_id: str, tool_context: ToolContext) -> dict:
     if not is_valid:
         return validation_error_response(error_msg)
 
+    tenant_id = get_tenant_id(tool_context)
     user_id = tool_context.user_id
     logger.info(f"[Refund Pre-Check] User {user_id} checking if order {order_id} is refundable")
 
     # Check 1: Verify ownership
-    is_authorized, order_data, error_msg = verify_order_ownership(order_id, user_id, action="check_if_refundable")
+    is_authorized, order_data, error_msg = verify_order_ownership(
+        order_id, user_id, tenant_id, action="check_if_refundable"
+    )
 
     if not is_authorized:
         logger.warning(f"[Refund Pre-Check] Not authorized: {error_msg}")
@@ -591,7 +616,7 @@ def check_if_refundable(order_id: str, tool_context: ToolContext) -> dict:
             "reason": "Invalid delivery date format. Please contact support.",
         }
 
-    policy = get_active_policy(as_of=delivered_date.strftime("%Y-%m-%d"))
+    policy = get_active_policy(tenant_id, as_of=delivered_date.strftime("%Y-%m-%d"))
     window_days = policy["window_days"]
     days_since_delivery = (datetime.now() - delivered_date).days
 
@@ -608,7 +633,7 @@ def check_if_refundable(order_id: str, tool_context: ToolContext) -> dict:
 
     # Check 4: Has items that can be refunded
     order_items = order_data.get("items", [])
-    already_refunded_ids = _get_refunded_item_ids(order_id)
+    already_refunded_ids = _get_refunded_item_ids(tenant_id, order_id)
 
     refundable_items = []
     already_refunded_items = []
@@ -682,11 +707,14 @@ def get_refundable_items(order_id: str, tool_context: ToolContext) -> dict:
     if not is_valid:
         return validation_error_response(error_msg)
 
+    tenant_id = get_tenant_id(tool_context)
     user_id = tool_context.user_id
     logger.info(f"[Refund Helper] User {user_id} checking refundable items for order: {order_id}")
 
     # Verify ownership
-    is_authorized, order_data, error_msg = verify_order_ownership(order_id, user_id, action="get_refundable_items")
+    is_authorized, order_data, error_msg = verify_order_ownership(
+        order_id, user_id, tenant_id, action="get_refundable_items"
+    )
 
     if not is_authorized:
         return {"status": "error", "message": error_msg}
@@ -702,7 +730,7 @@ def get_refundable_items(order_id: str, tool_context: ToolContext) -> dict:
     # Check return window
     delivered_date = _parse_date(order_data.get("delivered_date", ""))
     if delivered_date:
-        policy = get_active_policy(as_of=delivered_date.strftime("%Y-%m-%d"))
+        policy = get_active_policy(tenant_id, as_of=delivered_date.strftime("%Y-%m-%d"))
         window_days = policy["window_days"]
         days_since_delivery = (datetime.now() - delivered_date).days
         if days_since_delivery > window_days:
@@ -717,7 +745,7 @@ def get_refundable_items(order_id: str, tool_context: ToolContext) -> dict:
 
     # Get items
     order_items = order_data.get("items", [])
-    already_refunded_ids = _get_refunded_item_ids(order_id)
+    already_refunded_ids = _get_refunded_item_ids(tenant_id, order_id)
 
     refundable = []
     already_refunded = []

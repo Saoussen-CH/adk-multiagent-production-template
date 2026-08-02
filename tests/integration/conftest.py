@@ -99,7 +99,13 @@ def mock_backends():
         patch("customer_support_mas.agents.product.tools.db_client", mock_db),
         patch("customer_support_mas.agents.order.tools.db_client", mock_db),
         patch("customer_support_mas.agents.billing.tools.db_client", mock_db),
-        patch("customer_support_mas.agents.refund.tools.db_client", mock_db),
+        # refund/tools.py no longer imports a module-level db_client (Task 6)
+        # — see tests/unit/conftest.py's mock_backends for the up-to-date
+        # pattern (get_provider(tenant_id)._db via a patched get_db_client).
+        # NOTE: the product/order/billing db_client patches above are
+        # already stale from Tasks 4/5 (those modules stopped importing
+        # db_client directly then, routed through CommerceProvider instead)
+        # — pre-existing, out of scope for Task 6.
         patch("customer_support_mas.services.rag_search.RAGProductSearch", MockRAGProductSearch),
         patch("customer_support_mas.services.rag_search._rag_search", mock_rag),
         patch("customer_support_mas.services.rag_search.get_rag_search", return_value=mock_rag),

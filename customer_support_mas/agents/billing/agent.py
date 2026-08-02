@@ -10,13 +10,13 @@ from google.adk.tools import preload_memory_tool
 # Import tools
 from customer_support_mas.agents.billing.tools import (
     check_payment_status,
+    get_acceptable_refund_reasons,  # Informational - list valid refund reasons (tenant-scoped wrapper)
     get_invoice,
     get_invoice_by_order_id,
     get_my_invoices,
     get_my_payments,
 )
 from customer_support_mas.agents.refund.tools import (
-    get_acceptable_refund_reasons,  # Informational - list valid refund reasons
     get_refundable_items,  # Informational - check what can be refunded
 )
 

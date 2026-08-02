@@ -36,19 +36,21 @@ def clear_refunds_before_test(mock_db):
 
 
 def _active_refund_db_client():
-    """Return the Firestore mock actually patched into the refund tools module.
+    """Return the Firestore mock actually used by refund/tools.py for "test-tenant".
 
     NOTE: the `firestore_client`/`mock_db` fixture above wraps the
     session-scoped mock_db fixture from tests/conftest.py, which is a
     *different* MockFirestoreClient instance than the one the autouse,
     function-scoped `mock_backends` fixture (tests/unit/conftest.py) patches
-    into `customer_support_mas.agents.refund.tools.db_client` for each test.
-    Reading state that process_refund actually wrote (or verifying it wrote
-    nothing) must go through this live module attribute, not the fixture.
+    in for each test. Since Task 6, refund/tools.py no longer imports a
+    module-level `db_client` — process_refund resolves its Firestore handle
+    via `get_provider(tenant_id)._db`, so reading state it actually wrote
+    (or verifying it wrote nothing) must go through the same provider path,
+    not the `firestore_client` fixture.
     """
-    from customer_support_mas.agents.refund import tools as refund_tools
+    from customer_support_mas.providers.registry import get_provider
 
-    return refund_tools.db_client
+    return get_provider("test-tenant")._db
 
 
 @pytest.fixture
@@ -254,62 +256,62 @@ class TestBillingTools:
 class TestWorkflowTools:
     """Test workflow-related tools (refund process)."""
 
-    def test_validate_refund_request_valid_delivered(self, mock_tool_context):
+    def test_validate_refund_request_valid_delivered(self, mock_tool_context_with_tenant):
         """Test validating a delivered order (eligible for refund)."""
         from customer_support_mas.agents.refund.tools import validate_refund_request
 
         # ORD-67890 is delivered and owned by demo-user-001
-        result = validate_refund_request(order_id="ORD-67890", tool_context=mock_tool_context)
+        result = validate_refund_request(order_id="ORD-67890", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "valid"
         assert "items_to_refund" in result
 
-    def test_validate_refund_request_not_delivered(self, mock_tool_context):
+    def test_validate_refund_request_not_delivered(self, mock_tool_context_with_tenant):
         """Test validating an in-transit order (not yet delivered)."""
         from customer_support_mas.agents.refund.tools import validate_refund_request
 
         # ORD-12345 is in transit
-        result = validate_refund_request(order_id="ORD-12345", tool_context=mock_tool_context)
+        result = validate_refund_request(order_id="ORD-12345", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "not_eligible"
         assert "in transit" in result.get("message", "").lower() or "not delivered" in result.get("message", "").lower()
 
-    def test_validate_refund_request_invalid_order(self, mock_tool_context):
+    def test_validate_refund_request_invalid_order(self, mock_tool_context_with_tenant):
         """Test validating a non-existent order ID."""
         from customer_support_mas.agents.refund.tools import validate_refund_request
 
-        result = validate_refund_request(order_id="ORD-99999", tool_context=mock_tool_context)
+        result = validate_refund_request(order_id="ORD-99999", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] in ["invalid", "error"]
 
-    def test_check_refund_eligibility_eligible(self, mock_tool_context):
+    def test_check_refund_eligibility_eligible(self, mock_tool_context_with_tenant):
         """Test refund eligibility for eligible order (within 30-day window)."""
         from customer_support_mas.agents.refund.tools import check_refund_eligibility, validate_refund_request
 
         # First validate to populate tool_context.state with items
-        validate_refund_request(order_id="ORD-67890", tool_context=mock_tool_context)
+        validate_refund_request(order_id="ORD-67890", tool_context=mock_tool_context_with_tenant)
 
         # ORD-67890 should be within 30-day window (delivered 5 days ago)
-        result = check_refund_eligibility(order_id="ORD-67890", tool_context=mock_tool_context)
+        result = check_refund_eligibility(order_id="ORD-67890", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
         assert result.get("eligible")
 
-    def test_check_refund_eligibility_not_eligible(self, mock_tool_context):
+    def test_check_refund_eligibility_not_eligible(self, mock_tool_context_with_tenant):
         """Test refund eligibility for order past return window."""
         from customer_support_mas.agents.refund.tools import check_refund_eligibility
 
         # ORD-11111 should be past 30-day window (delivered 45 days ago)
-        result = check_refund_eligibility(order_id="ORD-11111", tool_context=mock_tool_context)
+        result = check_refund_eligibility(order_id="ORD-11111", tool_context=mock_tool_context_with_tenant)
 
         # Can be "not_eligible" or "success" with eligible=False depending on implementation
         assert not result.get("eligible")
 
-    def test_process_refund_success(self, mock_tool_context):
+    def test_process_refund_success(self, mock_tool_context_with_tenant):
         """Test that a valid refund request is staged for approval, not executed."""
         from customer_support_mas.agents.refund.tools import process_refund
 
-        result = process_refund(order_id="ORD-67890", reason_code="defective", tool_context=mock_tool_context)
+        result = process_refund(order_id="ORD-67890", reason_code="defective", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "pending_approval"
         assert "request_id" in result
@@ -324,28 +326,28 @@ class TestWorkflowTools:
         request_id = result["request_id"]
         db.collection("refund_requests").document(request_id).delete()
 
-    def test_process_refund_invalid_order(self, mock_tool_context):
+    def test_process_refund_invalid_order(self, mock_tool_context_with_tenant):
         """Test processing refund for invalid order."""
         from customer_support_mas.agents.refund.tools import process_refund
 
-        result = process_refund(order_id="ORD-99999", reason_code="defective", tool_context=mock_tool_context)
+        result = process_refund(order_id="ORD-99999", reason_code="defective", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "error"
 
-    def test_process_refund_invalid_reason(self, mock_tool_context):
+    def test_process_refund_invalid_reason(self, mock_tool_context_with_tenant):
         """Test processing refund with unacceptable reason."""
         from customer_support_mas.agents.refund.tools import process_refund
 
-        result = process_refund(order_id="ORD-67890", reason_code="changed_mind", tool_context=mock_tool_context)
+        result = process_refund(order_id="ORD-67890", reason_code="changed_mind", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "reason_not_acceptable"
 
-    def test_process_refund_unrecognized_reason_code(self, mock_tool_context):
+    def test_process_refund_unrecognized_reason_code(self, mock_tool_context_with_tenant):
         """A code that isn't in the policy's reason_codes is rejected outright,
         not fuzzy-matched — the fixed-code design has no fallback bucket."""
         from customer_support_mas.agents.refund.tools import process_refund
 
-        result = process_refund(order_id="ORD-67890", reason_code="the_dog_ate_it", tool_context=mock_tool_context)
+        result = process_refund(order_id="ORD-67890", reason_code="the_dog_ate_it", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "invalid_reason_code"
         assert "valid_reason_codes" in result
@@ -359,12 +361,12 @@ class TestWorkflowTools:
 class TestCheckIfRefundable:
     """Test the check_if_refundable pre-check tool."""
 
-    def test_check_if_refundable_eligible(self, mock_tool_context):
+    def test_check_if_refundable_eligible(self, mock_tool_context_with_tenant):
         """Test order that IS eligible for refund."""
         from customer_support_mas.agents.refund.tools import check_if_refundable
 
         # ORD-67890: delivered 5 days ago, within 30-day window
-        result = check_if_refundable(order_id="ORD-67890", tool_context=mock_tool_context)
+        result = check_if_refundable(order_id="ORD-67890", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "eligible"
         assert result["eligible"]
@@ -372,55 +374,55 @@ class TestCheckIfRefundable:
         assert result["estimated_refund_amount"] > 0
         assert result["days_remaining_in_window"] > 0
 
-    def test_check_if_refundable_past_window(self, mock_tool_context):
+    def test_check_if_refundable_past_window(self, mock_tool_context_with_tenant):
         """Test order past 30-day return window."""
         from customer_support_mas.agents.refund.tools import check_if_refundable
 
         # ORD-11111: delivered 45 days ago, past 30-day window
-        result = check_if_refundable(order_id="ORD-11111", tool_context=mock_tool_context)
+        result = check_if_refundable(order_id="ORD-11111", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "not_eligible"
         assert not result["eligible"]
         assert "30" in result.get("reason", "") or "window" in result.get("reason", "").lower()
 
-    def test_check_if_refundable_not_delivered(self, mock_tool_context):
+    def test_check_if_refundable_not_delivered(self, mock_tool_context_with_tenant):
         """Test order not yet delivered (in transit)."""
         from customer_support_mas.agents.refund.tools import check_if_refundable
 
         # ORD-12345: in transit, not delivered yet
-        result = check_if_refundable(order_id="ORD-12345", tool_context=mock_tool_context)
+        result = check_if_refundable(order_id="ORD-12345", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "not_eligible"
         assert not result["eligible"]
         assert "transit" in result.get("reason", "").lower() or "delivered" in result.get("reason", "").lower()
 
-    def test_check_if_refundable_invalid_order(self, mock_tool_context):
+    def test_check_if_refundable_invalid_order(self, mock_tool_context_with_tenant):
         """Test non-existent order."""
         from customer_support_mas.agents.refund.tools import check_if_refundable
 
-        result = check_if_refundable(order_id="ORD-99999", tool_context=mock_tool_context)
+        result = check_if_refundable(order_id="ORD-99999", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "not_eligible"
         assert not result["eligible"]
         assert "not found" in result.get("reason", "").lower()
 
-    def test_check_if_refundable_wrong_user(self, mock_tool_context_user2):
+    def test_check_if_refundable_wrong_user(self, mock_tool_context_user2_with_tenant):
         """Test order belonging to different user (authorization check)."""
         from customer_support_mas.agents.refund.tools import check_if_refundable
 
         # ORD-67890 belongs to demo-user-001, not demo-user-002
-        result = check_if_refundable(order_id="ORD-67890", tool_context=mock_tool_context_user2)
+        result = check_if_refundable(order_id="ORD-67890", tool_context=mock_tool_context_user2_with_tenant)
 
         assert result["status"] == "not_eligible"
         assert not result["eligible"]
         assert "permission" in result.get("reason", "").lower()
 
-    def test_check_if_refundable_processing_order(self, mock_tool_context_user2):
+    def test_check_if_refundable_processing_order(self, mock_tool_context_user2_with_tenant):
         """Test order still being processed."""
         from customer_support_mas.agents.refund.tools import check_if_refundable
 
         # ORD-22222 belongs to demo-user-002 and is in Processing status
-        result = check_if_refundable(order_id="ORD-22222", tool_context=mock_tool_context_user2)
+        result = check_if_refundable(order_id="ORD-22222", tool_context=mock_tool_context_user2_with_tenant)
 
         assert result["status"] == "not_eligible"
         assert not result["eligible"]
@@ -435,7 +437,7 @@ class TestCheckIfRefundable:
 class TestRefundWorkflowIntegration:
     """Test the complete refund workflow sequence."""
 
-    def test_full_refund_workflow_success(self, mock_tool_context):
+    def test_full_refund_workflow_success(self, mock_tool_context_with_tenant):
         """Test complete refund workflow: pre-check -> validate -> check -> process."""
         from customer_support_mas.agents.refund.tools import (
             check_if_refundable,
@@ -448,21 +450,21 @@ class TestRefundWorkflowIntegration:
         reason_code = "defective"
 
         # Step 0: Pre-check (new conversational flow)
-        precheck_result = check_if_refundable(order_id, tool_context=mock_tool_context)
+        precheck_result = check_if_refundable(order_id, tool_context=mock_tool_context_with_tenant)
         assert precheck_result["status"] == "eligible", f"Pre-check failed: {precheck_result}"
         assert precheck_result["eligible"]
 
         # Step 1: Validate order
-        validate_result = validate_refund_request(order_id, tool_context=mock_tool_context)
+        validate_result = validate_refund_request(order_id, tool_context=mock_tool_context_with_tenant)
         assert validate_result["status"] == "valid", f"Validation failed: {validate_result}"
 
         # Step 2: Check eligibility
-        eligibility_result = check_refund_eligibility(order_id, tool_context=mock_tool_context)
+        eligibility_result = check_refund_eligibility(order_id, tool_context=mock_tool_context_with_tenant)
         assert eligibility_result["status"] == "success", f"Eligibility check failed: {eligibility_result}"
         assert eligibility_result["eligible"], f"Order not eligible: {eligibility_result}"
 
         # Step 3: Process refund (stages a pending approval request, does not execute)
-        refund_result = process_refund(order_id, reason_code, tool_context=mock_tool_context)
+        refund_result = process_refund(order_id, reason_code, tool_context=mock_tool_context_with_tenant)
         assert refund_result["status"] == "pending_approval", f"Staging failed: {refund_result}"
         assert "request_id" in refund_result
 
@@ -475,32 +477,32 @@ class TestRefundWorkflowIntegration:
         # Cleanup
         db.collection("refund_requests").document(refund_result["request_id"]).delete()
 
-    def test_refund_workflow_stops_at_invalid_order(self, mock_tool_context):
+    def test_refund_workflow_stops_at_invalid_order(self, mock_tool_context_with_tenant):
         """Test workflow stops at validation for invalid order."""
         from customer_support_mas.agents.refund.tools import check_if_refundable
 
         # Pre-check - should fail for non-existent order
-        precheck_result = check_if_refundable("ORD-99999", tool_context=mock_tool_context)
+        precheck_result = check_if_refundable("ORD-99999", tool_context=mock_tool_context_with_tenant)
         assert precheck_result["status"] == "not_eligible"
         assert not precheck_result["eligible"]
 
         # Workflow should stop here - no further steps
 
-    def test_refund_workflow_stops_at_eligibility(self, mock_tool_context):
+    def test_refund_workflow_stops_at_eligibility(self, mock_tool_context_with_tenant):
         """Test workflow stops at eligibility check for ineligible order."""
         from customer_support_mas.agents.refund.tools import check_if_refundable
 
         order_id = "ORD-11111"  # Past return window
 
         # Pre-check - should fail due to past 30-day window
-        precheck_result = check_if_refundable(order_id, tool_context=mock_tool_context)
+        precheck_result = check_if_refundable(order_id, tool_context=mock_tool_context_with_tenant)
         assert precheck_result["status"] == "not_eligible"
         assert not precheck_result["eligible"]
         assert "days" in precheck_result.get("reason", "").lower()
 
         # Workflow should stop here - refund not processed
 
-    def test_new_conversational_flow(self, mock_tool_context):
+    def test_new_conversational_flow(self, mock_tool_context_with_tenant):
         """Test the new conversational refund flow:
         1. User requests refund (just order_id)
         2. System checks eligibility first
@@ -512,13 +514,13 @@ class TestRefundWorkflowIntegration:
         order_id = "ORD-67890"
 
         # Step 1: Pre-check eligibility (no reason needed yet)
-        precheck = check_if_refundable(order_id, tool_context=mock_tool_context)
+        precheck = check_if_refundable(order_id, tool_context=mock_tool_context_with_tenant)
         assert precheck["eligible"]
         assert "next_step" in precheck  # Should prompt for reason
 
         # Step 2: User provides reason, refund request is staged for approval
         reason_code = "damaged"
-        result = process_refund(order_id, reason_code, tool_context=mock_tool_context)
+        result = process_refund(order_id, reason_code, tool_context=mock_tool_context_with_tenant)
         assert result["status"] == "pending_approval"
 
         # Cleanup - via the actually-patched db_client (see _active_refund_db_client()).

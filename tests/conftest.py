@@ -68,13 +68,15 @@ def mock_db():
         patch("customer_support_mas.database.get_db_client", return_value=mock_client),
         patch("customer_support_mas.database.client.get_db_client", return_value=mock_client),
         patch("customer_support_mas.database.client.db_client", mock_client),
+        # No tools module imports a module-level db_client anymore:
+        # product/order/billing were routed through CommerceProvider in
+        # Tasks 4/5, and refund/tools.py followed in Task 6 — it now
+        # resolves its Firestore handle per-call via
+        # get_provider(tenant_id)._db, which itself goes through
+        # get_db_client (patched above), so no separate patch is needed here.
+        patch("customer_support_mas.providers.firestore_provider.get_db_client", return_value=mock_client),
     ):
-        # Also patch in the tools modules that import db_client at the top.
-        # product/order/billing tools no longer import db_client directly
-        # (routed through CommerceProvider instead — Tasks 4/5); only
-        # refund/tools.py still does (Task 6's scope).
-        with patch("customer_support_mas.agents.refund.tools.db_client", mock_client):
-            yield mock_client
+        yield mock_client
 
 
 @pytest.fixture(scope="session", autouse=True)

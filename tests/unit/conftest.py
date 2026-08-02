@@ -126,10 +126,21 @@ def mock_db():
 
     Tests that need their own mock instance can use this fixture.
     It does not auto-apply patches — tests must use monkeypatch to wire it up.
+
+    Builds under a frozen `fixtures.datetime` (independent of the
+    `mock_backends` fixture's own datetime_patches below): `mock_backends`
+    requests `mock_db` as a parameter, so pytest fully resolves this fixture
+    *before* `mock_backends`'s body (and its datetime patches) ever runs.
+    Without freezing here too, MockFirestoreClient() bakes in `_days_ago(...)`
+    dates computed from the real wall clock, while every date comparison
+    later in the test (e.g. check_refund_eligibility's `datetime.now()`)
+    sees the frozen date — silently desyncing seed data from "today" by
+    however much real time has passed since _FROZEN_DATE.
     """
     from tests.mock_firestore import MockFirestoreClient
 
-    return MockFirestoreClient()
+    with patch("customer_support_mas.database.fixtures.datetime", _FrozenDatetime):
+        return MockFirestoreClient()
 
 
 @pytest.fixture
@@ -191,7 +202,10 @@ def mock_backends(mock_db):
         patch("customer_support_mas.database.get_db_client", return_value=mock_db),
         patch("customer_support_mas.database.client.get_db_client", return_value=mock_db),
         patch("customer_support_mas.database.client.db_client", mock_db),
-        patch("customer_support_mas.agents.refund.tools.db_client", mock_db),
+        # refund/tools.py no longer imports a module-level db_client (Task 6)
+        # — it resolves its Firestore handle per-call via
+        # get_provider(tenant_id)._db, which itself goes through
+        # get_db_client, patched below.
         patch("customer_support_mas.providers.firestore_provider.get_db_client", return_value=mock_db),
         patch("customer_support_mas.tenancy.config.get_db_client", return_value=mock_db),
         patch("customer_support_mas.services.rag_search.RAGProductSearch", MockRAGProductSearch),
@@ -238,3 +252,13 @@ def mock_tool_context_with_tenant(mock_tool_context):
     standard fixture for tool tests going forward."""
     mock_tool_context.state["tenant_id"] = "test-tenant"
     return mock_tool_context
+
+
+@pytest.fixture
+def mock_tool_context_user2_with_tenant(mock_tool_context_user2):
+    """mock_tool_context_user2 (existing fixture, defined in test_tools.py)
+    + tenant_id in state — same pattern as mock_tool_context_with_tenant,
+    for the handful of tests that need a second authenticated user rather
+    than demo-user-001."""
+    mock_tool_context_user2.state["tenant_id"] = "test-tenant"
+    return mock_tool_context_user2
