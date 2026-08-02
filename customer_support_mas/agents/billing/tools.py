@@ -64,15 +64,7 @@ def get_invoice_by_order_id(order_id: str, tool_context: ToolContext, _order_dat
     if invoice is None:
         return {"status": "not_found", "message": f"No invoice found for order {order_id}"}
 
-    return {
-        "status": "success",
-        "invoice": {
-            "invoice_id": invoice.invoice_id,
-            "order_id": invoice.order_id,
-            "amount": invoice.amount,
-            "status": invoice.status,
-        },
-    }
+    return {"status": "success", "invoice": invoice.as_response_dict()}
 
 
 @tool_error_handler
@@ -89,10 +81,7 @@ def get_my_invoices(tool_context: ToolContext, _user_id: str = None, **kwargs) -
         logger.info(f"[BILLING] Found {len(invoices)} invoices for user {_user_id}")
         return {
             "status": "success",
-            "invoices": [
-                {"invoice_id": i.invoice_id, "order_id": i.order_id, "amount": i.amount, "status": i.status}
-                for i in invoices
-            ],
+            "invoices": [i.as_response_dict() for i in invoices],
             "total_invoices": len(invoices),
         }
 
@@ -116,10 +105,7 @@ def check_payment_status(order_id: str, tool_context: ToolContext, _order_data: 
     if payment is None:
         return {"status": "not_found", "message": f"No payment record found for order {order_id}"}
 
-    return {
-        "status": "success",
-        "payment": {"order_id": payment.order_id, "status": payment.status, "amount": payment.amount},
-    }
+    return {"status": "success", "payment": payment.as_response_dict()}
 
 
 @tool_error_handler
@@ -136,7 +122,7 @@ def get_my_payments(tool_context: ToolContext, _user_id: str = None, **kwargs) -
         logger.info(f"[BILLING] Found {len(payments)} payments for user {_user_id}")
         return {
             "status": "success",
-            "payments": [{"order_id": p.order_id, "status": p.status, "amount": p.amount} for p in payments],
+            "payments": [p.as_response_dict() for p in payments],
             "total_payments": len(payments),
         }
 

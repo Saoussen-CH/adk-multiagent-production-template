@@ -13,7 +13,7 @@ import os
 import uuid
 from typing import Optional
 
-from customer_support_mas.providers.models import Invoice, Order, Payment, Product, RefundResult
+from customer_support_mas.providers.models import Inventory, Invoice, Order, Payment, Product, RefundResult
 
 _MOCK_ORDERS = {
     "SHOPIFY-ORD-1001": {
@@ -59,8 +59,13 @@ class ShopifyProvider:
             return None
         return Product(product_id=product_id, **data)
 
-    def get_inventory(self, tenant_id: str, product_id: str) -> Optional[int]:
-        return 42 if product_id in _MOCK_PRODUCTS else None
+    def get_inventory(self, tenant_id: str, product_id: str) -> Optional[Inventory]:
+        if product_id not in _MOCK_PRODUCTS:
+            return None
+        # Shopify models stock per location; the mock exposes one location so
+        # the normalized `warehouses` breakdown is still populated rather
+        # than empty (matching FirestoreProvider's shape for any caller).
+        return Inventory(product_id=product_id, total_stock=42, warehouses={"shopify-default": 42})
 
     def get_invoice(self, tenant_id: str, invoice_id: str) -> Optional[Invoice]:
         return None  # Shopify has no separate "invoice" concept for typical DTC orders
@@ -75,11 +80,11 @@ class ShopifyProvider:
         order = self.get_order(tenant_id, order_id)
         if order is None:
             return None
-        return Payment(order_id=order_id, customer_id=order.customer_id, status="paid", amount=order.total)
+        return Payment(order_id=order_id, customer_id=order.customer_id, payment_status="paid", amount_paid=order.total)
 
     def list_payments_for_customer(self, tenant_id: str, customer_id: str) -> list[Payment]:
         return [
-            Payment(order_id=o.order_id, customer_id=o.customer_id, status="paid", amount=o.total)
+            Payment(order_id=o.order_id, customer_id=o.customer_id, payment_status="paid", amount_paid=o.total)
             for o in self.list_orders_for_customer(tenant_id, customer_id)
         ]
 

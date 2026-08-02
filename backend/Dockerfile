@@ -33,6 +33,14 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY backend/pyproject.toml ./backend/
 
+# The backend depends on the workspace-root customer_support_mas package
+# (backend/app/main.py imports customer_support_mas.rate_limiting;
+# backend/app/refund_approvals.py imports
+# customer_support_mas.providers.registry). --no-editable below builds it
+# into a real wheel, so its source must be present in this stage — without
+# this COPY, uvicorn dies at startup with ModuleNotFoundError.
+COPY customer_support_mas ./customer_support_mas
+
 # Install only the backend package dependencies, no dev extras
 # --frozen: fail if uv.lock is out of date (ensures reproducibility)
 # --no-dev: exclude dev/test dependencies

@@ -8,8 +8,6 @@ Run with:
     pytest tests/unit/test_tools.py -v -s
 """
 
-from unittest.mock import MagicMock
-
 import pytest
 
 # =============================================================================
@@ -51,32 +49,6 @@ def _active_refund_db_client():
     from customer_support_mas.providers.registry import get_provider
 
     return get_provider("test-tenant")._db
-
-
-@pytest.fixture
-def mock_tool_context():
-    """Create a mock ToolContext for tools that need it.
-
-    Uses demo-user-001 which owns orders: ORD-12345, ORD-67890, ORD-11111
-    """
-    mock_ctx = MagicMock()
-    mock_ctx.state = {}
-    mock_ctx.user_id = "demo-user-001"  # Must match customer_id in seed data
-    mock_ctx.actions = MagicMock()  # For escalate action
-    return mock_ctx
-
-
-@pytest.fixture
-def mock_tool_context_user2():
-    """Create a mock ToolContext for demo-user-002.
-
-    Owns orders: ORD-22222
-    """
-    mock_ctx = MagicMock()
-    mock_ctx.state = {}
-    mock_ctx.user_id = "demo-user-002"
-    mock_ctx.actions = MagicMock()
-    return mock_ctx
 
 
 # =============================================================================
@@ -145,6 +117,9 @@ class TestProductTools:
         result = check_inventory(product_id="PROD-001", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
+        assert result["inventory"]["total_stock"] == 45
+        # The per-warehouse breakdown is quoted verbatim to customers.
+        assert result["inventory"]["warehouses"] == {"US-West": 20, "US-East": 15, "EU": 10}
 
     def test_get_product_reviews(self, mock_tool_context_with_tenant):
         """Test getting reviews for a product."""
@@ -221,6 +196,11 @@ class TestBillingTools:
         assert result["status"] == "success"
         assert "invoice" in result
         assert result["invoice"]["invoice_id"] == "INV-2025-001"
+        # Value-level, not just status-level: a field-mapping regression that
+        # nulls the money fields used to pass this test silently. See
+        # tests/unit/test_tool_response_fields.py for the full coverage.
+        assert result["invoice"]["total"] == 1295.98
+        assert result["invoice"]["status"] == "Pending"
 
     def test_get_invoice_invalid(self, mock_tool_context_with_tenant):
         """Test getting a non-existent invoice."""
@@ -238,6 +218,8 @@ class TestBillingTools:
 
         assert result["status"] == "success"
         assert "invoice" in result
+        assert result["invoice"]["invoice_id"] == "INV-2025-001"
+        assert result["invoice"]["total"] == 1295.98
 
     def test_check_payment_status(self, mock_tool_context_with_tenant):
         """Test checking payment status."""
@@ -246,6 +228,8 @@ class TestBillingTools:
         result = check_payment_status(order_id="ORD-12345", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
+        assert result["payment"]["payment_status"] == "Pending"
+        assert result["payment"]["amount_due"] == 1295.98
 
 
 # =============================================================================

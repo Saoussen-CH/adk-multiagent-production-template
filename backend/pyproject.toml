@@ -19,7 +19,18 @@ dependencies = [
     "email-validator>=2.0.0",
     "bcrypt>=4.0.0",
     "google-cloud-modelarmor>=0.1.0",
+    # The backend imports customer_support_mas.rate_limiting (per-tenant rate
+    # limiting on /api/chat) and customer_support_mas.providers.registry
+    # (resolving a tenant's CommerceProvider for the refund-approval
+    # endpoints). Without this declaration the Cloud Run image has no
+    # customer_support_mas at all and uvicorn dies with ModuleNotFoundError
+    # on startup. The package's __init__ exports root_agent lazily, so this
+    # dependency does NOT make the backend construct the agent graph.
+    "customer-support-mas",
 ]
+
+[tool.uv.sources]
+customer-support-mas = { workspace = true }
 
 [tool.setuptools.packages.find]
 where = ["."]

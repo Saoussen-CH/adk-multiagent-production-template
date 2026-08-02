@@ -41,10 +41,7 @@ def search_products(query: str, tool_context: ToolContext) -> dict:
     if not products:
         return {"status": "no_results", "message": f"No products found matching '{query}'"}
 
-    results = [
-        {"id": p.product_id, "name": p.name, "price": p.price, "category": p.category, "description": p.description}
-        for p in products
-    ]
+    results = [p.as_response_dict() for p in products]
 
     tool_context.state["last_product_id"] = results[0]["id"]
     tool_context.state["last_product_name"] = results[0]["name"]
@@ -78,16 +75,7 @@ def get_product_details(product_id: str, tool_context: ToolContext) -> dict:
     if product is None:
         return {"status": "not_found", "message": f"Product {product_id} not found"}
 
-    return {
-        "status": "success",
-        "product": {
-            "id": product.product_id,
-            "name": product.name,
-            "price": product.price,
-            "description": product.description,
-            "category": product.category,
-        },
-    }
+    return {"status": "success", "product": product.as_response_dict()}
 
 
 @tool_error_handler
@@ -121,13 +109,7 @@ def get_last_mentioned_product(tool_context: ToolContext) -> dict:
 
     return {
         "status": "success",
-        "product": {
-            "id": product.product_id,
-            "name": product.name,
-            "price": product.price,
-            "description": product.description,
-            "category": product.category,
-        },
+        "product": product.as_response_dict(),
         "context_note": f"This is the {last_product_name} you asked about.",
     }
 
@@ -146,12 +128,15 @@ def check_inventory(product_id: str, tool_context: ToolContext) -> dict:
 
     tenant_id = get_tenant_id(tool_context)
     provider = get_provider(tenant_id)
-    quantity = provider.get_inventory(tenant_id, product_id)
+    inventory = provider.get_inventory(tenant_id, product_id)
 
-    if quantity is None:
+    if inventory is None:
         return {"status": "not_found", "message": f"No inventory record for product {product_id}"}
 
-    return {"status": "success", "inventory": {"product_id": product_id, "quantity": quantity}}
+    # as_response_dict() keeps the per-warehouse breakdown, which the agent
+    # quotes to customers ("45 units across our warehouses: ...") — an
+    # earlier version returned only a bare quantity and silently dropped it.
+    return {"status": "success", "inventory": inventory.as_response_dict()}
 
 
 @tool_error_handler

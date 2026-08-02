@@ -211,9 +211,12 @@ def _order_to_dict(order: Order) -> dict:
 
 
 def _invoice_to_dict(invoice: Invoice) -> dict:
-    return {
-        "customer_id": invoice.customer_id,
-        "order_id": invoice.order_id,
-        "amount": invoice.amount,
-        "status": invoice.status,
-    }
+    """The `_invoice_data` payload injected into decorated tools. Delegates to
+    Invoice.as_response_dict() so the decorator path and the direct
+    provider path can never disagree about which invoice fields survive —
+    they used to, and the decorator's hand-written subset silently dropped
+    date/due_date/items/subtotal/tax/total. `invoice_id` is stripped because
+    every consuming tool supplies it itself."""
+    invoice_data = invoice.as_response_dict()
+    invoice_data.pop("invoice_id", None)
+    return invoice_data

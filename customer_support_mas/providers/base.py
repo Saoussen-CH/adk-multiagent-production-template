@@ -9,7 +9,7 @@ guarantee behind "no implicit tenant" (Global Constraints, this plan).
 
 from typing import Optional, Protocol
 
-from customer_support_mas.providers.models import Invoice, Order, Payment, Product, RefundResult
+from customer_support_mas.providers.models import Inventory, Invoice, Order, Payment, Product, RefundResult
 
 
 class CommerceProvider(Protocol):
@@ -19,7 +19,7 @@ class CommerceProvider(Protocol):
 
     def get_product(self, tenant_id: str, product_id: str) -> Optional[Product]: ...
 
-    def get_inventory(self, tenant_id: str, product_id: str) -> Optional[int]: ...
+    def get_inventory(self, tenant_id: str, product_id: str) -> Optional[Inventory]: ...
 
     def get_invoice(self, tenant_id: str, invoice_id: str) -> Optional[Invoice]: ...
 

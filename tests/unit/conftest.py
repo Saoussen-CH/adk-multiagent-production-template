@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 from datetime import datetime as real_datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import dotenv
 import pytest
@@ -244,6 +244,33 @@ def _seed_default_test_tenant(mock_db):
     )
     yield
     config_module._tenant_config_cache.clear()
+
+
+@pytest.fixture
+def mock_tool_context():
+    """A mock ToolContext for demo-user-001, who owns ORD-12345, ORD-67890
+    and ORD-11111 in the seed data.
+
+    Lives here rather than in tests/unit/test_tools.py (its original home)
+    so every unit test module can build on it — `mock_tool_context_with_tenant`
+    below derives from it, and a fixture defined inside one test module is
+    invisible to the others.
+    """
+    mock_ctx = MagicMock()
+    mock_ctx.state = {}
+    mock_ctx.user_id = "demo-user-001"  # Must match customer_id in seed data
+    mock_ctx.actions = MagicMock()  # For escalate action
+    return mock_ctx
+
+
+@pytest.fixture
+def mock_tool_context_user2():
+    """A mock ToolContext for demo-user-002, who owns ORD-22222."""
+    mock_ctx = MagicMock()
+    mock_ctx.state = {}
+    mock_ctx.user_id = "demo-user-002"
+    mock_ctx.actions = MagicMock()
+    return mock_ctx
 
 
 @pytest.fixture

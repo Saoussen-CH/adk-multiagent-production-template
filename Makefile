@@ -165,6 +165,8 @@ test-tools: ## Run pure tool tests (no LLM, mocked Firestore) — fast
 		tests/unit/test_rate_limiting.py \
 		tests/unit/test_auth_provider_integration.py \
 		tests/unit/test_cross_tenant_isolation.py \
+		tests/unit/test_backend_packaging.py \
+		tests/unit/test_tool_response_fields.py \
 		$(PYTEST_FLAGS)
 
 test-unit: ## Run unit agent eval (EVAL_PROFILE=fast|standard|full)

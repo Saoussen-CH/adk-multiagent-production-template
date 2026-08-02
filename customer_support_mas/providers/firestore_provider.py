@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Optional
 
 from customer_support_mas.database import get_db_client
-from customer_support_mas.providers.models import Invoice, Order, Payment, Product, RefundResult
+from customer_support_mas.providers.models import Inventory, Invoice, Order, Payment, Product, RefundResult
 from customer_support_mas.services.rag_search import get_rag_search
 
 logger = logging.getLogger(__name__)
@@ -49,25 +49,53 @@ def _product_from_doc(product_id: str, data: dict) -> Product:
         description=data.get("description"),
         category=data.get("category"),
         keywords=data.get("keywords", []),
+        specs=data.get("specs", {}),
+        warranty=data.get("warranty"),
+        rating=data.get("rating"),
     )
 
 
 def _invoice_from_doc(invoice_id: str, data: dict) -> Invoice:
+    """Field names here must match what invoice documents actually store
+    (see customer_support_mas/database/fixtures.py). An earlier version read
+    a non-existent `amount` key and dropped date/due_date/items/subtotal/
+    tax/total entirely, so every invoice reached the agent as a bare
+    id + status with a null amount."""
     return Invoice(
         invoice_id=invoice_id,
         customer_id=data.get("customer_id"),
         order_id=data.get("order_id"),
-        amount=data.get("amount"),
+        date=data.get("date"),
+        due_date=data.get("due_date"),
         status=data.get("status"),
+        items=data.get("items", []),
+        subtotal=data.get("subtotal"),
+        tax=data.get("tax"),
+        total=data.get("total"),
     )
 
 
 def _payment_from_doc(order_id: str, data: dict) -> Payment:
+    """Payment documents store `payment_status` and `amount_due`/`amount_paid`
+    — not `status`/`amount`. Reading the latter silently produced
+    {"status": None, "amount": None} for every payment."""
     return Payment(
         order_id=order_id,
         customer_id=data.get("customer_id"),
-        status=data.get("status"),
-        amount=data.get("amount"),
+        payment_status=data.get("payment_status"),
+        amount_due=data.get("amount_due"),
+        amount_paid=data.get("amount_paid"),
+        payment_method=data.get("payment_method"),
+        payment_date=data.get("payment_date"),
+        transaction_id=data.get("transaction_id"),
+    )
+
+
+def _inventory_from_doc(product_id: str, data: dict) -> Inventory:
+    return Inventory(
+        product_id=product_id,
+        total_stock=data.get("total_stock"),
+        warehouses=data.get("warehouses", {}),
     )
 
 
@@ -97,11 +125,11 @@ class FirestoreProvider:
             return None
         return _product_from_doc(product_id, doc.to_dict())
 
-    def get_inventory(self, tenant_id: str, product_id: str) -> Optional[int]:
+    def get_inventory(self, tenant_id: str, product_id: str) -> Optional[Inventory]:
         doc = self._db.collection("inventory").document(product_id).get()
         if not doc.exists:
             return None
-        return doc.to_dict().get("total_stock")
+        return _inventory_from_doc(product_id, doc.to_dict())
 
     def get_invoice(self, tenant_id: str, invoice_id: str) -> Optional[Invoice]:
         doc = self._db.collection("invoices").document(invoice_id).get()
@@ -161,6 +189,11 @@ class FirestoreProvider:
                         product_id=r["id"],
                         name=r.get("name", ""),
                         price=r.get("price", 0.0),
+                        # `description` is in every RAG hit (see
+                        # services/rag_search.py and tests/mock_rag_search.py)
+                        # — dropping it made RAG-backed search results
+                        # strictly poorer than keyword-fallback ones.
+                        description=r.get("description"),
                         category=r.get("category"),
                     )
                     for r in rag_results
