@@ -17,7 +17,5 @@ class MissingTenantError(Exception):
 def get_tenant_id(tool_context) -> str:
     tenant_id = tool_context.state.get("tenant_id")
     if not tenant_id:
-        raise MissingTenantError(
-            "tool_context.state has no tenant_id — every session must be created with one"
-        )
+        raise MissingTenantError("tool_context.state has no tenant_id — every session must be created with one")
     return tenant_id
