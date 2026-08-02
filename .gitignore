@@ -111,3 +111,6 @@ terraform/environments/*/backend.hcl
 ENTRY.md
 LINKEDIN.md
 CV_ENTRY.md
+
+# Isolated worktrees for feature branches (superpowers:using-git-worktrees)
+.worktrees/
