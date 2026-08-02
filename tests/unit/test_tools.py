@@ -162,41 +162,41 @@ class TestProductTools:
 class TestOrderTools:
     """Test order-related tools."""
 
-    def test_track_order_valid(self, mock_tool_context):
+    def test_track_order_valid(self, mock_tool_context_with_tenant):
         """Test tracking a valid order."""
         from customer_support_mas.agents.order.tools import track_order
 
-        result = track_order(order_id="ORD-12345", tool_context=mock_tool_context)
+        result = track_order(order_id="ORD-12345", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
         assert "order" in result
         assert result["order"]["order_id"] == "ORD-12345"
         assert "status" in result["order"]
 
-    def test_track_order_invalid(self, mock_tool_context):
+    def test_track_order_invalid(self, mock_tool_context_with_tenant):
         """Test tracking a non-existent order."""
         from customer_support_mas.agents.order.tools import track_order
 
-        result = track_order(order_id="ORD-99999", tool_context=mock_tool_context)
+        result = track_order(order_id="ORD-99999", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] in ["error", "not_found"]
 
-    def test_track_order_in_transit(self, mock_tool_context):
+    def test_track_order_in_transit(self, mock_tool_context_with_tenant):
         """Test tracking an in-transit order."""
         from customer_support_mas.agents.order.tools import track_order
 
-        result = track_order(order_id="ORD-12345", tool_context=mock_tool_context)
+        result = track_order(order_id="ORD-12345", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
         # ORD-12345 should be in transit based on seed data
         order_status = result["order"]["status"].lower().replace("_", " ")
         assert order_status in ["in transit", "shipped", "processing"]
 
-    def test_track_order_delivered(self, mock_tool_context):
+    def test_track_order_delivered(self, mock_tool_context_with_tenant):
         """Test tracking a delivered order."""
         from customer_support_mas.agents.order.tools import track_order
 
-        result = track_order(order_id="ORD-67890", tool_context=mock_tool_context)
+        result = track_order(order_id="ORD-67890", tool_context=mock_tool_context_with_tenant)
 
         assert result["status"] == "success"
         assert result["order"]["status"].lower() == "delivered"

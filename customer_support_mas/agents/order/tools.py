@@ -8,14 +8,14 @@ All tools verify ownership using decorators - users can only access their own or
 import logging
 
 from google.adk.tools.tool_context import ToolContext
-from google.cloud.firestore_v1.base_query import FieldFilter
 
 from customer_support_mas.auth import (
     requires_authenticated_user,
     requires_order_ownership,
 )
-from customer_support_mas.database import db_client
 from customer_support_mas.error_handling import tool_error_handler
+from customer_support_mas.providers.registry import get_provider
+from customer_support_mas.tenancy.context import get_tenant_id
 from customer_support_mas.validation import (
     validate_order_id,
     validation_error_response,
@@ -101,76 +101,48 @@ def get_order_details(order_id: str, tool_context: ToolContext, _order_data: dic
 @tool_error_handler
 @requires_authenticated_user
 def get_order_history(tool_context: ToolContext, _user_id: str = None, **kwargs) -> dict:
-    """Get complete order history for the authenticated user with full details.
-
-    Returns all orders with items, totals, and shipping information.
-
-    Args:
-        tool_context: ADK ToolContext (automatically injected)
-        _user_id: Authenticated user ID (injected by decorator)
-    """
+    """Get complete order history for the authenticated user with full details."""
+    tenant_id = get_tenant_id(tool_context)
     logger.info(f"[ORDER HISTORY] Fetching full order history for user: {_user_id}")
 
-    query = db_client.collection("orders").where(filter=FieldFilter("customer_id", "==", _user_id))
-    orders = [{"order_id": doc.id, **doc.to_dict()} for doc in query.stream()]
+    provider = get_provider(tenant_id)
+    orders = provider.list_orders_for_customer(tenant_id, _user_id)
 
     if orders:
-        detailed_orders = []
-        for o in orders:
-            detailed_orders.append(
-                {
-                    "order_id": o["order_id"],
-                    "date": o.get("date"),
-                    "status": o.get("status"),
-                    "total": o.get("total"),
-                    "items": o.get("items", []),
-                    "carrier": o.get("carrier"),
-                    "tracking_number": o.get("tracking_number"),
-                    "shipping_address": o.get("shipping_address"),
-                }
-            )
-
+        detailed_orders = [
+            {
+                "order_id": o.order_id,
+                "date": o.date,
+                "status": o.status,
+                "total": o.total,
+                "items": o.items,
+                "carrier": o.carrier,
+                "tracking_number": o.tracking_number,
+                "shipping_address": o.shipping_address,
+            }
+            for o in orders
+        ]
         logger.info(f"[ORDER HISTORY] Found {len(detailed_orders)} orders for user {_user_id}")
-        return {
-            "status": "success",
-            "orders": detailed_orders,
-            "total_orders": len(detailed_orders),
-        }
+        return {"status": "success", "orders": detailed_orders, "total_orders": len(detailed_orders)}
 
     logger.info(f"[ORDER HISTORY] No orders found for user {_user_id}")
-    return {
-        "status": "no_orders",
-        "message": "No orders found for your account.",
-    }
+    return {"status": "no_orders", "message": "No orders found for your account."}
 
 
 @tool_error_handler
 @requires_authenticated_user
 def get_my_order_history(tool_context: ToolContext, _user_id: str = None, **kwargs) -> dict:
-    """Get order history summary for the authenticated user.
-
-    Returns a brief summary of all orders (ID, date, total, status).
-    Use get_order_history() for full details including items.
-
-    Args:
-        tool_context: ADK ToolContext (automatically injected)
-        _user_id: Authenticated user ID (injected by decorator)
-    """
+    """Get order history summary for the authenticated user."""
+    tenant_id = get_tenant_id(tool_context)
     logger.info(f"[ORDER HISTORY] Fetching order summary for user: {_user_id}")
 
-    query = db_client.collection("orders").where(filter=FieldFilter("customer_id", "==", _user_id))
-    orders = [{"order_id": doc.id, **doc.to_dict()} for doc in query.stream()]
+    provider = get_provider(tenant_id)
+    orders = provider.list_orders_for_customer(tenant_id, _user_id)
 
     if orders:
-        summaries = [
-            {"order_id": o["order_id"], "date": o.get("date"), "total": o.get("total"), "status": o.get("status")}
-            for o in orders
-        ]
+        summaries = [{"order_id": o.order_id, "date": o.date, "total": o.total, "status": o.status} for o in orders]
         logger.info(f"[ORDER HISTORY] Found {len(summaries)} orders for user {_user_id}")
         return {"status": "success", "orders": summaries}
 
     logger.info(f"[ORDER HISTORY] No orders found for user {_user_id}")
-    return {
-        "status": "no_orders",
-        "message": "No orders found for your account.",
-    }
+    return {"status": "no_orders", "message": "No orders found for your account."}

@@ -151,7 +151,7 @@ def mock_db_factory():
 
 
 @pytest.fixture(autouse=True)
-def mock_backends():
+def mock_backends(mock_db):
     """Apply mock Firestore + RAG backends for agent evaluation re-runs.
 
     The eval datasets were generated with mocked backends (MockFirestoreClient
@@ -164,8 +164,15 @@ def mock_backends():
     - Refund eligibility calculations see the same "today" as the mock data
     This ensures the mock and real Firestore agree on dates when seeded on the
     same day, while keeping CI results stable regardless of when tests run.
+
+    Depends on the `mock_db` fixture (rather than constructing its own
+    MockFirestoreClient) so that every collaborator patched below — including
+    the provider/tenancy layer's `get_db_client` bindings — resolves to the
+    exact same instance a test can also reach directly via the `mock_db`
+    fixture parameter (needed for e.g. `_seed_default_test_tenant` and
+    tests/unit/test_auth_provider_integration.py, which seed data straight
+    into `mock_db` and expect FirestoreProvider/load_tenant_config to see it).
     """
-    from tests.mock_firestore import MockFirestoreClient
     from tests.mock_rag_search import MockRAGProductSearch
 
     # Freeze datetime BEFORE instantiating MockFirestoreClient so that
@@ -177,7 +184,6 @@ def mock_backends():
     for p in datetime_patches:
         p.start()
 
-    mock_db = MockFirestoreClient()
     mock_rag = MockRAGProductSearch()
 
     backend_patches = [
@@ -186,9 +192,10 @@ def mock_backends():
         patch("customer_support_mas.database.client.get_db_client", return_value=mock_db),
         patch("customer_support_mas.database.client.db_client", mock_db),
         patch("customer_support_mas.agents.product.tools.db_client", mock_db),
-        patch("customer_support_mas.agents.order.tools.db_client", mock_db),
         patch("customer_support_mas.agents.billing.tools.db_client", mock_db),
         patch("customer_support_mas.agents.refund.tools.db_client", mock_db),
+        patch("customer_support_mas.providers.firestore_provider.get_db_client", return_value=mock_db),
+        patch("customer_support_mas.tenancy.config.get_db_client", return_value=mock_db),
         patch("customer_support_mas.services.rag_search.RAGProductSearch", MockRAGProductSearch),
         patch.dict("customer_support_mas.services.rag_search._rag_search_instances", {"customer-support-db": mock_rag}),
         patch("customer_support_mas.services.rag_search.get_rag_search", return_value=mock_rag),
@@ -203,3 +210,35 @@ def mock_backends():
 
     for p in backend_patches + datetime_patches:
         p.stop()
+
+
+@pytest.fixture(autouse=True)
+def _seed_default_test_tenant(mock_db):
+    """Every unit test needs a real tenant_id to pass (Global Constraint: no
+    default tenant in application code) — this fixture seeds ONE tenant
+    config, pointing at the same mock_db the rest of the suite already
+    uses, so existing seed data (fixtures.py's products/orders/etc.) is
+    reachable under a real tenant_id without duplicating it per test."""
+    from customer_support_mas.tenancy import config as config_module
+
+    config_module._tenant_config_cache.clear()
+    mock_db.collection("tenants").document("test-tenant").set(
+        {
+            "tenant_id": "test-tenant",
+            "tier": "light",
+            "provider_type": "firestore",
+            "provider_config": {"database_id": "test-tenant-db"},
+            "pool_id": "test-pool",
+            "refund_policy_ref": "test-tenant",
+        }
+    )
+    yield
+    config_module._tenant_config_cache.clear()
+
+
+@pytest.fixture
+def mock_tool_context_with_tenant(mock_tool_context):
+    """mock_tool_context (existing fixture) + tenant_id in state — the
+    standard fixture for tool tests going forward."""
+    mock_tool_context.state["tenant_id"] = "test-tenant"
+    return mock_tool_context
