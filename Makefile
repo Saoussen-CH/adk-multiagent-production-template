@@ -159,8 +159,10 @@ test-tools: ## Run pure tool tests (no LLM, mocked Firestore) — fast
 		tests/unit/test_tenancy_config.py \
 		tests/unit/test_tenancy_context.py \
 		tests/unit/test_firestore_provider.py \
-		tests/unit/test_provider_registry.py::test_get_provider_dispatches_firestore \
-		tests/unit/test_provider_registry.py::test_get_provider_unknown_provider_type_raises \
+		tests/unit/test_provider_registry.py \
+		tests/unit/test_shopify_provider.py \
+		tests/unit/test_provider_contract.py \
+		tests/unit/test_rate_limiting.py \
 		tests/unit/test_auth_provider_integration.py \
 		tests/unit/test_cross_tenant_isolation.py \
 		$(PYTEST_FLAGS)

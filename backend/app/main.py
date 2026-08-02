@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from customer_support_mas.rate_limiting import check_tenant_rate_limit
+
 from . import auth, refund_approvals
 from .agent_client import agent_client
 from .config import settings
@@ -393,6 +395,15 @@ async def chat(
             raise HTTPException(
                 status_code=401,
                 detail="Authentication required. Use Authorization header or X-User-Id for anonymous users.",
+            )
+
+        # Per-tenant rate limit — an additional ceiling on top of the
+        # per-user RateLimitDependency("chat") check above, not a
+        # replacement for it: prevents one tenant from starving others
+        # sharing the same light-tier pool project's quota (spec section 6).
+        if not check_tenant_rate_limit(request.tenant_id):
+            raise HTTPException(
+                status_code=429, detail="Rate limit exceeded for this tenant. Please try again shortly."
             )
 
         # Set user context for logging
