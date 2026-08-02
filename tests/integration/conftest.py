@@ -96,22 +96,31 @@ def mock_backends():
         patch("customer_support_mas.database.get_db_client", return_value=mock_db),
         patch("customer_support_mas.database.client.get_db_client", return_value=mock_db),
         patch("customer_support_mas.database.client.db_client", mock_db),
-        patch("customer_support_mas.agents.product.tools.db_client", mock_db),
-        patch("customer_support_mas.agents.order.tools.db_client", mock_db),
-        patch("customer_support_mas.agents.billing.tools.db_client", mock_db),
-        # refund/tools.py no longer imports a module-level db_client (Task 6)
-        # — see tests/unit/conftest.py's mock_backends for the up-to-date
-        # pattern (get_provider(tenant_id)._db via a patched get_db_client).
-        # NOTE: the product/order/billing db_client patches above are
-        # already stale from Tasks 4/5 (those modules stopped importing
-        # db_client directly then, routed through CommerceProvider instead)
-        # — pre-existing, out of scope for Task 6.
+        # No tools module imports a module-level db_client anymore:
+        # product/order/billing were routed through CommerceProvider
+        # (Tasks 4/5), and refund/tools.py followed (Task 6). All of them
+        # now resolve their Firestore handle per-call via
+        # get_provider(tenant_id) -> load_tenant_config(tenant_id), which
+        # goes through tenancy/config.py's get_db_client, and
+        # FirestoreProvider._db, which goes through database/__init__'s
+        # get_db_client (both patched below) — see tests/unit/conftest.py's
+        # mock_backends for the precedent this follows.
+        patch("customer_support_mas.providers.firestore_provider.get_db_client", return_value=mock_db),
+        patch("customer_support_mas.tenancy.config.get_db_client", return_value=mock_db),
+        # services/rag_search.py's module-level `_rag_search` singleton was
+        # replaced by a `_rag_search_instances` dict keyed by database_id
+        # (tenant-scoped RAG). Patching RAGProductSearch itself covers any
+        # database_id get_rag_search() lazily constructs an instance for;
+        # the patch.dict below additionally pre-seeds the default database
+        # id, matching tests/conftest.py and tests/unit/conftest.py.
         patch("customer_support_mas.services.rag_search.RAGProductSearch", MockRAGProductSearch),
-        patch("customer_support_mas.services.rag_search._rag_search", mock_rag),
+        patch.dict("customer_support_mas.services.rag_search._rag_search_instances", {"customer-support-db": mock_rag}),
         patch("customer_support_mas.services.rag_search.get_rag_search", return_value=mock_rag),
         patch("customer_support_mas.services.get_rag_search", return_value=mock_rag),
-        patch("customer_support_mas.agents.product.tools.get_rag_search", return_value=mock_rag),
-        patch("customer_support_mas.agents.product.tools.USE_RAG", True),
+        # product/tools.py no longer imports get_rag_search or USE_RAG
+        # directly — RAG search now lives behind
+        # FirestoreProvider.search_products(), which imports get_rag_search
+        # itself (patched above via the rag_search module).
     ]
 
     for p in patches:
