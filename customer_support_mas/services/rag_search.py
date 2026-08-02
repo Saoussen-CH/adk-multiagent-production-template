@@ -286,15 +286,22 @@ class RAGProductSearch:
         return filtered[:limit]
 
 
-# Global instance (initialized lazily)
-_rag_search = None
+_rag_search_instances: dict[str, "RAGProductSearch"] = {}
 
 
-def get_rag_search() -> RAGProductSearch:
-    """Get or create RAG search instance."""
-    global _rag_search
-    if _rag_search is None:
+def get_rag_search(database_id: Optional[str] = None) -> RAGProductSearch:
+    """Get or create a RAGProductSearch instance for the given tenant database.
+
+    Cached per database_id — each light-tier tenant has its own named
+    Firestore database (see customer_support_mas/providers/firestore_provider.py),
+    so its product embeddings must never be searched from another tenant's
+    RAGProductSearch instance.
+    """
+    if database_id is None:
         database_id = os.environ.get("FIRESTORE_DATABASE", "customer-support-db")
+
+    if database_id not in _rag_search_instances:
         location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
-        _rag_search = RAGProductSearch(database_id, location)
-    return _rag_search
+        _rag_search_instances[database_id] = RAGProductSearch(database_id, location)
+
+    return _rag_search_instances[database_id]

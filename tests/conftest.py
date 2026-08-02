@@ -88,7 +88,7 @@ def mock_rag():
 
     with (
         patch("customer_support_mas.services.rag_search.RAGProductSearch", MockRAGProductSearch),
-        patch("customer_support_mas.services.rag_search._rag_search", mock_instance),
+        patch.dict("customer_support_mas.services.rag_search._rag_search_instances", {"customer-support-db": mock_instance}),
         patch("customer_support_mas.services.rag_search.get_rag_search", return_value=mock_instance),
         patch("customer_support_mas.services.get_rag_search", return_value=mock_instance),
         patch("customer_support_mas.agents.product.tools.get_rag_search", return_value=mock_instance),
