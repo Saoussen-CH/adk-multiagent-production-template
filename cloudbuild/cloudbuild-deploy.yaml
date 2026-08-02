@@ -144,7 +144,8 @@ steps:
                tests/unit/test_refund_approvals.py tests/unit/test_admin_refund_endpoints.py \
                tests/unit/test_refund_staging.py tests/unit/test_fedex_client.py \
                tests/unit/test_fedex_mcp_server.py tests/unit/test_order_mcp_toolset.py \
-               tests/unit/test_deploy_plugins.py -v --tb=short
+               tests/unit/test_deploy_plugins.py tests/unit/test_provider_models.py \
+               tests/unit/test_database_client.py tests/unit/test_rag_search_multi_db.py -v --tb=short
     env:
       - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
       - "GOOGLE_CLOUD_LOCATION=${_GOOGLE_CLOUD_LOCATION}"

@@ -104,6 +104,9 @@ steps:
                tests/unit/test_fedex_mcp_server.py \
                tests/unit/test_order_mcp_toolset.py \
                tests/unit/test_deploy_plugins.py \
+               tests/unit/test_provider_models.py \
+               tests/unit/test_database_client.py \
+               tests/unit/test_rag_search_multi_db.py \
                tests/unit/test_agent_eval_ci.py -v --tb=short
     env:
       - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
