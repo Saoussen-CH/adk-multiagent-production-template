@@ -209,26 +209,46 @@ class FirestoreProvider:
         return True, invoice, ""
 
     def execute_refund(
-        self, tenant_id: str, order_id: str, customer_id: str, items: list[dict], amount: float
+        self,
+        tenant_id: str,
+        order_id: str,
+        customer_id: str,
+        items: list[dict],
+        amount: float,
+        reason: Optional[str] = None,
+        reason_category: Optional[str] = None,
     ) -> RefundResult:
         """Write the final refunds record — called only after human approval
         (backend/app/refund_approvals.py's approve_refund, Task 7). This is
         the money-moving step; the FirestoreProvider's version just writes a
         record (no real payment gateway is integrated yet — see project
         memory real-production-project-not-demo.md). A ShopifyProvider's
-        execute_refund would call Shopify's real Refund API instead."""
+        execute_refund would call Shopify's real Refund API instead.
+
+        `reason`/`reason_category` are optional (see CommerceProvider.
+        execute_refund's docstring) but approve_refund always supplies them
+        today, sourced from the staged refund_requests doc — the approver
+        UI reads both fields directly off the written refund record, so
+        they're included here when given rather than dropped. `items` is
+        stored verbatim; approve_refund is responsible for any per-item
+        enrichment (e.g. per-item refund_amount) before calling this, since
+        that shape is specific to how this backend's approver UI reads
+        refund records, not a general CommerceProvider concern."""
         refund_id = f"REF-{order_id.replace('ORD-', '')}-{uuid.uuid4().hex[:8]}"
         now = datetime.now().isoformat()
-        self._db.collection("refunds").document(refund_id).set(
-            {
-                "refund_id": refund_id,
-                "order_id": order_id,
-                "customer_id": customer_id,
-                "status": "pending",
-                "items": items,
-                "total_refund_amount": amount,
-                "created_at": now,
-            }
-        )
+        refund_record = {
+            "refund_id": refund_id,
+            "order_id": order_id,
+            "customer_id": customer_id,
+            "status": "pending",
+            "items": items,
+            "total_refund_amount": amount,
+            "created_at": now,
+        }
+        if reason is not None:
+            refund_record["reason"] = reason
+        if reason_category is not None:
+            refund_record["reason_category"] = reason_category
+        self._db.collection("refunds").document(refund_id).set(refund_record)
         logger.info("[FirestoreProvider] Executed refund %s for order %s: $%s", refund_id, order_id, amount)
         return RefundResult(success=True, refund_id=refund_id, message="Refund recorded")

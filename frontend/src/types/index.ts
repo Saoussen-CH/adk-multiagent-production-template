@@ -70,6 +70,7 @@ export interface Message {
 export interface ChatRequest {
   message: string;
   session_id?: string;
+  tenant_id: string;
 }
 
 export interface ChatResponse {

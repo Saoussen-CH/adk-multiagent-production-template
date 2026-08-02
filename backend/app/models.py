@@ -52,10 +52,19 @@ class ChatRequest(BaseModel):
     - Authenticated users: Pass auth token in Authorization header
     - Anonymous users: Pass user_id from AnonymousUserResponse
     - session_id: Identifies a specific conversation thread
+    - tenant_id: Which merchant/tenant this chat belongs to (required, no
+      default — see CommerceProvider's "no implicit tenant" constraint)
     """
 
     message: str = Field(..., min_length=1, description="User message")
     session_id: Optional[str] = Field(None, description="Optional session ID for specific conversation thread")
+    tenant_id: str = Field(
+        ...,
+        description=(
+            "Which merchant/tenant this chat is for — the embedding widget's "
+            "own store identifier, required on every request"
+        ),
+    )
 
 
 class RefundReasonCode(BaseModel):

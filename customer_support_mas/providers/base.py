@@ -37,10 +37,30 @@ class CommerceProvider(Protocol):
 
     def search_products(self, tenant_id: str, query: str, limit: int = 5) -> list[Product]: ...
 
-    def verify_order_ownership(self, tenant_id: str, order_id: str, customer_id: str) -> tuple[bool, Optional[Order], str]: ...
+    def verify_order_ownership(
+        self, tenant_id: str, order_id: str, customer_id: str
+    ) -> tuple[bool, Optional[Order], str]: ...
 
-    def verify_invoice_ownership(self, tenant_id: str, invoice_id: str, customer_id: str) -> tuple[bool, Optional[Invoice], str]: ...
+    def verify_invoice_ownership(
+        self, tenant_id: str, invoice_id: str, customer_id: str
+    ) -> tuple[bool, Optional[Invoice], str]: ...
 
     def execute_refund(
-        self, tenant_id: str, order_id: str, customer_id: str, items: list[dict], amount: float
-    ) -> RefundResult: ...
+        self,
+        tenant_id: str,
+        order_id: str,
+        customer_id: str,
+        items: list[dict],
+        amount: float,
+        reason: Optional[str] = None,
+        reason_category: Optional[str] = None,
+    ) -> RefundResult:
+        """`reason`/`reason_category` are optional pass-through metadata for
+        the refund record — backend/app/refund_approvals.py's approve_refund
+        (Task 7) always supplies them (sourced from the staged
+        refund_requests doc's policy-derived reason label/code), and any
+        implementation that persists a refund record should preserve them if
+        given. They're optional here (not required positional args) so a
+        provider whose native refund API doesn't have an equivalent concept
+        isn't forced to invent one."""
+        ...

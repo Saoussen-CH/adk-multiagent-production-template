@@ -138,6 +138,7 @@ class AgentEngineClient:
         user_id: str,
         agent_engine_session_id: Optional[str],
         message: str,
+        tenant_id: str,
         timeout_seconds: float = DEFAULT_QUERY_TIMEOUT_SECONDS,
     ) -> tuple[str, str, Optional[list]]:
         """
@@ -153,11 +154,18 @@ class AgentEngineClient:
         - user_id: Identifies the user (from auth or anonymous)
         - agent_engine_session_id: Agent Engine's session ID for this conversation
         - If agent_engine_session_id is None, creates a new session on Agent Engine
+        - tenant_id: Only used when creating a new session — set into ADK
+          session state (state={"tenant_id": tenant_id}) so every agent tool
+          call in this session can resolve it via get_tenant_id(tool_context)
+          for the rest of the session's life. Existing sessions don't need it
+          re-passed on every turn.
 
         Args:
             user_id: User ID (from auth or anonymous)
             agent_engine_session_id: Agent Engine session ID (None for new session)
             message: User message
+            tenant_id: Which merchant/tenant this conversation belongs to
+                (required — no default tenant)
             timeout_seconds: Maximum time to wait for response (default: 120s)
 
         Returns:
@@ -188,7 +196,9 @@ class AgentEngineClient:
                     @AGENT_RETRY_POLICY
                     async def _create_session():
                         async with asyncio.timeout(SESSION_CREATE_TIMEOUT_SECONDS):
-                            return await self.remote_app.async_create_session(user_id=user_id)
+                            return await self.remote_app.async_create_session(
+                                user_id=user_id, state={"tenant_id": tenant_id}
+                            )
 
                     try:
                         remote_session = await _create_session()

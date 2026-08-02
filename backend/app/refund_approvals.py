@@ -8,8 +8,14 @@ module is the other half of that human-in-the-loop design:
     via the API; this code moves the money.
 
 None of the LLM-facing agent tools ever write to the ``refunds`` collection
-directly anymore — only ``approve_refund`` below does, and only after the
-dual-control and idempotency gates pass.
+directly anymore — only ``approve_refund`` below triggers that write, and
+only after the dual-control and idempotency gates pass. As of Task 7,
+``approve_refund`` no longer writes to ``refunds`` itself: it resolves the
+requesting tenant's ``CommerceProvider`` (``get_provider(tenant_id)``) and
+calls ``provider.execute_refund(...)``, so the actual write goes through
+whatever backend that tenant is configured for (native Firestore today,
+potentially Shopify or another platform later) instead of a hardcoded
+Firestore collection reference here.
 
 All functions here are plain, side-effect-explicit functions that take a raw
 Firestore client (or an in-memory test double with the same surface) as their
@@ -36,9 +42,10 @@ pointed at real Firestore (tracked as follow-up, not silently dropped).
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
+
+from customer_support_mas.providers.registry import get_provider
 
 PENDING_APPROVAL = "PENDING_APPROVAL"
 APPROVED = "APPROVED"
@@ -46,7 +53,6 @@ REJECTED = "REJECTED"
 EXPIRED = "EXPIRED"
 
 REFUND_REQUESTS_COLLECTION = "refund_requests"
-REFUNDS_COLLECTION = "refunds"
 
 
 class ApprovalError(Exception):
@@ -119,6 +125,7 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
     if request.get("status") != PENDING_APPROVAL:
         raise ApprovalError("not_pending", f"Refund request {request_id!r} is not pending approval")
 
+    tenant_id = request["tenant_id"]
     order_id = request["order_id"]
     user_id = request["user_id"]  # the ORIGINAL requester, not the approver
     items = request["items"]
@@ -126,51 +133,57 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
     reason = request["reason"]
     reason_category = request["reason_category"]
 
-    # Execute: write the refund record. This is CLOSE to, but not byte-identical
-    # with, the shape the old (pre-HITL) process_refund wrote directly to
-    # "refunds":
-    #   - "items" here preserves every field already on the staged item dict
-    #     (product_id/name/qty/price for real order items) and adds the same
-    #     per-item "refund_amount" the old code computed, so for real order
-    #     data the resulting shape matches. Unlike the old code, this does
-    #     NOT hard-require "name" to be present (item.get, not item[]) —
-    #     deliberately, since the PENDING_APPROVAL doc this reads is written
-    #     by process_refund()'s own item shape, not re-derived from "orders"
-    #     here, and this module shouldn't assume its exact keys.
+    # Execute: delegate the actual refund write to the requesting tenant's
+    # CommerceProvider (Task 7) instead of writing to "refunds" directly
+    # here. This mirrors, field for field, the shape the old (pre-provider)
+    # code wrote directly to "refunds":
+    #   - "items" gets the same per-item "refund_amount" the old code
+    #     computed (item.get("price", 0) * item.get("qty", 1)) baked in
+    #     before being handed to the provider — that enrichment is specific
+    #     to how this backend's approver UI reads refund records, not a
+    #     general CommerceProvider concern, so it happens here rather than
+    #     inside FirestoreProvider.execute_refund. Unlike the old code, this
+    #     does NOT hard-require "name" to be present (item.get, not
+    #     item[]) — deliberately, since the PENDING_APPROVAL doc this reads
+    #     is written by process_refund()'s own item shape, not re-derived
+    #     from "orders" here, and this module shouldn't assume its exact
+    #     keys.
+    #   - "reason"/"reason_category" are passed through as execute_refund's
+    #     optional parameters (CommerceProvider, Task 7) so they survive
+    #     into the final refund record for the approver UI, which reads
+    #     both fields directly.
     #   - "original_order_total" from the old record is intentionally NOT
     #     reproduced: the PENDING_APPROVAL request doc this function reads
     #     (see `request` above) only carries order_id/user_id/items/
-    #     refund_amount/reason/reason_category — it never stored the order's
-    #     total. Recovering it here would mean this module doing its own
-    #     "orders" collection lookup, which is more coupling than this
+    #     refund_amount/reason/reason_category/tenant_id — it never stored
+    #     the order's total. Recovering it here would mean this module doing
+    #     its own "orders" lookup, which is more coupling than this
     #     execute-only module (see module docstring) should take on for a
     #     field nothing currently reads. If a consumer needs it, prefer
     #     having process_refund() capture order_data.get("total") into the
     #     request doc at staging time, not adding a lookup here.
-    refund_id = f"REF-{order_id.replace('ORD-', '')}-{uuid.uuid4().hex[:8]}"
-    refund_record = {
-        "refund_id": refund_id,
-        "order_id": order_id,
-        "customer_id": user_id,
-        "reason": reason,
-        "reason_category": reason_category,
-        "status": "pending",  # the refund's OWN lifecycle status (pending/cancelled)
-        # Intentionally naive (no tzinfo), unlike approved_at/rejected_at below —
-        # this mirrors the pre-HITL process_refund code exactly (verified against
-        # git history). Do not "fix" this into timezone-aware; that would be a
-        # regression in the refund record's historical shape.
-        "created_at": datetime.now().isoformat(),
-        "items": [
-            {**item, "refund_amount": item.get("price", 0) * item.get("qty", 1)}
-            for item in items
-        ],
-        "total_refund_amount": refund_amount,
-    }
-    db.collection(REFUNDS_COLLECTION).document(refund_id).set(refund_record)
+    items_with_refund_amount = [
+        {**item, "refund_amount": item.get("price", 0) * item.get("qty", 1)} for item in items
+    ]
 
-    # Mark the approval request itself as APPROVED. Writing the refund doc
-    # above (scanned by customer_support_mas's duplicate-refund detection)
-    # IS the complete "mark items refunded" side effect — nothing else to do.
+    provider = get_provider(tenant_id)
+    result = provider.execute_refund(
+        tenant_id=tenant_id,
+        order_id=order_id,
+        customer_id=user_id,
+        items=items_with_refund_amount,
+        amount=refund_amount,
+        reason=reason,
+        reason_category=reason_category,
+    )
+    if not result.success:
+        raise ApprovalError("refund_execution_failed", result.message)
+
+    refund_id = result.refund_id
+
+    # Mark the approval request itself as APPROVED. The refund write above
+    # (scanned by customer_support_mas's duplicate-refund detection) IS the
+    # complete "mark items refunded" side effect — nothing else to do.
     updated_request = dict(request)
     updated_request.update(
         {

@@ -378,7 +378,7 @@ async def chat(
     - Anonymous users (via X-User-Id header with anon-* user_id)
 
     Args:
-        request: ChatRequest with message and optional session_id
+        request: ChatRequest with message, optional session_id, and required tenant_id
         user_id: Extracted from Authorization header (if authenticated)
         x_user_id: Extracted from X-User-Id header (if anonymous)
 
@@ -449,7 +449,10 @@ async def chat(
 
         # Query the agent
         response_text, agent_engine_session_id, reason_codes = await agent_client.query_agent(
-            user_id=actual_user_id, agent_engine_session_id=agent_engine_session_id, message=request.message
+            user_id=actual_user_id,
+            agent_engine_session_id=agent_engine_session_id,
+            message=request.message,
+            tenant_id=request.tenant_id,
         )
 
         # If new session, create it in database

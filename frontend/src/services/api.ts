@@ -147,7 +147,7 @@ function getAuthHeaders(): Record<string, string> {
 // =============================================================================
 
 export const chatService = {
-  async sendMessage(message: string, sessionId?: string): Promise<ChatResponse> {
+  async sendMessage(message: string, sessionId?: string, tenantId?: string): Promise<ChatResponse> {
     const headers = getAuthHeaders();
 
     console.log('[API] Sending message:', {
@@ -155,9 +155,15 @@ export const chatService = {
       session_id: sessionId
     });
 
+    // tenant_id: which merchant/tenant this chat belongs to. There's no
+    // embed-script mechanism in this repo yet for a widget to expose its
+    // own store identifier, so this falls back to a build-time env var as
+    // a placeholder for that (out of scope for this plan — see backend
+    // ChatRequest.tenant_id's docstring).
     const requestData: ChatRequest = {
       message,
       session_id: sessionId,
+      tenant_id: tenantId || import.meta.env.VITE_TENANT_ID,
     };
 
     // Chat requests don't retry on server errors (to avoid duplicate messages)
