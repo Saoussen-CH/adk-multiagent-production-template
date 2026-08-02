@@ -99,23 +99,35 @@ def test_tenant_a_provider_cannot_see_tenant_b_data_via_any_database_id(isolated
 def test_verify_ownership_rejects_cross_tenant_customer_match_by_coincidence(isolated_tenants):
     """If tenant A and tenant B happen to have a customer_id collision
     (e.g. both have a 'demo-user-001'), tenant A's provider must still only
-    ever check against tenant A's own database — never tenant B's."""
+    ever check against tenant A's own database — never tenant B's.
+
+    Both tenants share the colliding customer_id (that's the coincidence
+    being tested), but their ORD-SHARED documents otherwise differ (total:
+    100.0 vs 999.0, same pattern as the other database_id-distinguishing
+    tests in this file). If tenant A's provider were ever misrouted to
+    tenant B's database, `is_authorized` would happen to still be True
+    (both docs have the same customer_id) but the returned order's `total`
+    would silently be tenant B's value instead of tenant A's — that's the
+    actual leak this test needs to catch, so it must assert on `total`,
+    not just `is_authorized`.
+    """
     db_a, db_b = isolated_tenants
     db_a.collection("orders").document("ORD-SHARED").set(
-        {"customer_id": "demo-user-001", "status": "Delivered", "items": []}
+        {"customer_id": "demo-user-001", "status": "Delivered", "total": 100.0, "items": []}
     )
     db_b.collection("orders").document("ORD-SHARED").set(
-        {"customer_id": "demo-user-001", "status": "Delivered", "items": []}
+        {"customer_id": "demo-user-001", "status": "Delivered", "total": 999.0, "items": []}
     )
 
     provider_a = FirestoreProvider({"database_id": "tenant-a-db"})
     is_authorized, order, _ = provider_a.verify_order_ownership("tenant-a", "ORD-SHARED", "demo-user-001")
 
     assert is_authorized is True
-    # Confirms this read came from db_a, not db_b, by checking db_a's own
-    # collection directly still has exactly the doc we expect and wasn't
-    # mutated by the read:
-    assert db_a.collection("orders").document("ORD-SHARED").get().to_dict()["customer_id"] == "demo-user-001"
+    # The real assertion: this must be tenant A's $100 order, not tenant
+    # B's $999 one. A read that was ever misrouted to db_b would still
+    # report is_authorized=True (customer_id collides) but total would be
+    # 999.0 — this line is what actually fails in that scenario.
+    assert order.total == 100.0
 
 
 def test_missing_tenant_id_is_a_hard_error_not_a_silent_default():
