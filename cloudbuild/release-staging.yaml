@@ -107,6 +107,8 @@ steps:
                tests/unit/test_provider_models.py \
                tests/unit/test_database_client.py \
                tests/unit/test_rag_search_multi_db.py \
+               tests/unit/test_tenancy_config.py \
+               tests/unit/test_tenancy_context.py \
                tests/unit/test_agent_eval_ci.py -v --tb=short
     env:
       - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"

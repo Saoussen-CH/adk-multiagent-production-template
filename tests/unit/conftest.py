@@ -120,6 +120,18 @@ def ci_environment_setup():
     logger.info("[CI TEARDOWN] CI test session complete")
 
 
+@pytest.fixture
+def mock_db():
+    """Provide a fresh MockFirestoreClient for each test.
+
+    Tests that need their own mock instance can use this fixture.
+    It does not auto-apply patches — tests must use monkeypatch to wire it up.
+    """
+    from tests.mock_firestore import MockFirestoreClient
+
+    return MockFirestoreClient()
+
+
 @pytest.fixture(autouse=True)
 def mock_backends():
     """Apply mock Firestore + RAG backends for agent evaluation re-runs.
