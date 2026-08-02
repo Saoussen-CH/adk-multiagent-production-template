@@ -97,7 +97,7 @@ steps:
       - "-c"
       - |
         export PATH="/workspace/.venv/bin:$$PATH"
-        pytest tests/unit/test_tools.py tests/unit/test_mock_rag.py tests/unit/test_refund_standalone.py tests/unit/test_provider_models.py tests/unit/test_database_client.py tests/unit/test_rag_search_multi_db.py tests/unit/test_tenancy_config.py tests/unit/test_tenancy_context.py tests/unit/test_firestore_provider.py tests/unit/test_provider_registry.py::test_get_provider_dispatches_firestore tests/unit/test_provider_registry.py::test_get_provider_unknown_provider_type_raises tests/unit/test_auth_provider_integration.py -v --tb=short
+        pytest tests/unit/test_tools.py tests/unit/test_mock_rag.py tests/unit/test_refund_standalone.py tests/unit/test_refund_policy.py tests/unit/test_provider_models.py tests/unit/test_database_client.py tests/unit/test_rag_search_multi_db.py tests/unit/test_tenancy_config.py tests/unit/test_tenancy_context.py tests/unit/test_firestore_provider.py tests/unit/test_provider_registry.py::test_get_provider_dispatches_firestore tests/unit/test_provider_registry.py::test_get_provider_unknown_provider_type_raises tests/unit/test_auth_provider_integration.py -v --tb=short
     env:
       - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
       - "GOOGLE_CLOUD_LOCATION=${_GOOGLE_CLOUD_LOCATION}"

@@ -151,6 +151,7 @@ test-tools: ## Run pure tool tests (no LLM, mocked Firestore) — fast
 		tests/unit/test_tools.py \
 		tests/unit/test_mock_rag.py \
 		tests/unit/test_refund_standalone.py \
+		tests/unit/test_refund_policy.py \
 		tests/unit/test_provider_models.py \
 		tests/unit/test_database_client.py \
 		tests/unit/test_rag_search_multi_db.py \

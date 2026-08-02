@@ -104,6 +104,7 @@ steps:
         export PATH="/workspace/.venv/bin:$$PATH"
         pytest tests/unit/test_tools.py tests/unit/test_mock_rag.py \
                tests/unit/test_refund_standalone.py \
+               tests/unit/test_refund_policy.py \
                tests/unit/test_refund_approvals.py \
                tests/unit/test_admin_refund_endpoints.py \
                tests/unit/test_refund_staging.py \
