@@ -147,6 +147,21 @@ class MockFirestoreClient:
         self._subcollections_store = {}
         seed = get_sample_data()
         for name, docs in seed.items():
+            if name == "refund_policy":
+                # fixtures.py nests this as {tenant_id: {version_key: doc}}
+                # to match Task 6's tenant-scoped storage path
+                # tenants/{tenant_id}/refund_policy/{version} (a
+                # subcollection, not a top-level collection — see
+                # customer_support_mas/agents/refund/policy.py). Write
+                # straight into the subcollections store under the same
+                # (parent_collection_name, doc_id, subcollection_name) key
+                # MockDocument.collection() uses, so
+                # db.collection("tenants").document(tenant_id)
+                #   .collection("refund_policy") finds it.
+                for tenant_id, versions in docs.items():
+                    key = ("tenants", tenant_id, "refund_policy")
+                    self._subcollections_store[key] = dict(versions)
+                continue
             self._collections[name] = dict(docs)  # copy
 
     def collection(self, name):

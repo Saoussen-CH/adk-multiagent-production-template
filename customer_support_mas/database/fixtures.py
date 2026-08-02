@@ -422,16 +422,43 @@ def get_sample_data():
         },
     }
 
+    # =========================================================================
+    # TENANTS - Multi-tenant config (Task 2's TenantConfig shape)
+    # =========================================================================
+    # A real, named tenant — never an implicit/default one (Global
+    # Constraint: no default tenant anywhere in this system). All the
+    # global/user data above becomes reachable only via this tenant's
+    # tenant_id once seeded by seed_firestore() below.
+    tenants = {
+        "acme-electronics": {
+            "tenant_id": "acme-electronics",
+            "tier": "light",
+            "provider_type": "firestore",
+            "provider_config": {"database_id": "customer-support-db"},
+            "pool_id": "light-pool-1",
+            "refund_policy_ref": "acme-electronics",
+        },
+    }
+
     # Refund policy as versioned config, not hardcoded constants — see
     # customer_support_mas/agents/refund/policy.py. This seeds the same
     # values policy.py's DEFAULT_POLICY falls back to when unseeded, so
     # seeding this collection is a real-config equivalent, not a behavior
     # change. Real orgs would add a second doc with a later effective_from
     # to change policy going forward without touching past orders.
+    #
+    # Structure: {tenant_id: {version_key: policy_doc}}, matching Task 6's
+    # tenant-scoped storage path tenants/{tenant_id}/refund_policy/{version}
+    # (a subcollection, not a top-level collection) — seed_firestore() below
+    # and tests/mock_firestore.py both write this nested by tenant_id into
+    # that subcollection path rather than a flat top-level "refund_policy"
+    # collection.
     from customer_support_mas.agents.refund.policy import DEFAULT_POLICY
 
     refund_policy = {
-        "v1": DEFAULT_POLICY,
+        "acme-electronics": {
+            "v1": DEFAULT_POLICY,
+        },
     }
 
     return {
@@ -439,6 +466,7 @@ def get_sample_data():
         "inventory": inventory,
         "reviews": reviews,
         "orders": orders,
+        "tenants": tenants,
         "refund_policy": refund_policy,
         "invoices": invoices,
         "payments": payments,
@@ -515,7 +543,24 @@ def seed_firestore(project_id: str, database_id: str = "(default)", clear: bool 
 
     if clear:
         print("\n⚠️  Clearing existing data...")
-        for collection_name in data.keys():
+        for collection_name, documents in data.items():
+            if collection_name == "refund_policy":
+                # Nested by tenant_id ({tenant_id: {version_key: doc}}) and
+                # stored under the tenants/{tenant_id}/refund_policy
+                # subcollection (Task 6), not a top-level collection — see
+                # the write loop below and
+                # customer_support_mas/agents/refund/policy.py.
+                for tenant_id, versions in documents.items():
+                    for version_key in versions:
+                        (
+                            db.collection("tenants")
+                            .document(tenant_id)
+                            .collection("refund_policy")
+                            .document(version_key)
+                            .delete()
+                        )
+                print("   Cleared: refund_policy (tenants/{tenant_id}/refund_policy)")
+                continue
             docs = db.collection(collection_name).stream()
             for doc in docs:
                 doc.reference.delete()
@@ -523,6 +568,25 @@ def seed_firestore(project_id: str, database_id: str = "(default)", clear: bool 
 
     print("\n📦 Seeding collections...")
     for collection_name, documents in data.items():
+        if collection_name == "refund_policy":
+            # Tenant-scoped subcollection path (Task 6):
+            # tenants/{tenant_id}/refund_policy/{version} — fixtures.py's
+            # get_sample_data() nests this as
+            # {tenant_id: {version_key: policy_doc}} rather than a flat
+            # top-level "refund_policy" collection.
+            count = 0
+            for tenant_id, versions in documents.items():
+                for version_key, doc_data in versions.items():
+                    (
+                        db.collection("tenants")
+                        .document(tenant_id)
+                        .collection("refund_policy")
+                        .document(version_key)
+                        .set(doc_data)
+                    )
+                    count += 1
+            print(f"   ✓ refund_policy: {count} documents (under tenants/{{tenant_id}}/refund_policy)")
+            continue
         collection_ref = db.collection(collection_name)
         count = 0
         for doc_id, doc_data in documents.items():
