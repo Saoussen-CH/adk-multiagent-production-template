@@ -146,7 +146,10 @@ steps:
                tests/unit/test_fedex_mcp_server.py tests/unit/test_order_mcp_toolset.py \
                tests/unit/test_deploy_plugins.py tests/unit/test_provider_models.py \
                tests/unit/test_database_client.py tests/unit/test_rag_search_multi_db.py \
-               tests/unit/test_tenancy_config.py tests/unit/test_tenancy_context.py -v --tb=short
+               tests/unit/test_tenancy_config.py tests/unit/test_tenancy_context.py \
+               tests/unit/test_firestore_provider.py \
+               tests/unit/test_provider_registry.py::test_get_provider_dispatches_firestore \
+               tests/unit/test_provider_registry.py::test_get_provider_unknown_provider_type_raises -v --tb=short
     env:
       - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
       - "GOOGLE_CLOUD_LOCATION=${_GOOGLE_CLOUD_LOCATION}"

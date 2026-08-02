@@ -1,0 +1,223 @@
+"""FirestoreProvider: the refactor of every direct Firestore call that used
+to live inline in agents/{order,product,billing,refund}/tools.py and
+auth.py. Behavior for a given tenant's data is byte-identical to the
+pre-multi-tenant single-store behavior — this is a refactor, not a
+redesign (Global Constraints, plan
+docs/superpowers/plans/2026-08-02-multi-tenant-provider-architecture.md).
+
+Each tenant using this provider has its own named Firestore database
+(provider_config["database_id"]) — physical data separation within a
+shared pool project, not just a query-level filter (spec section 6).
+"""
+
+import logging
+import uuid
+from datetime import datetime
+from typing import Optional
+
+from customer_support_mas.database import get_db_client
+from customer_support_mas.providers.models import Invoice, Order, Payment, Product, RefundResult
+from customer_support_mas.services.rag_search import get_rag_search
+
+logger = logging.getLogger(__name__)
+
+
+def _order_from_doc(order_id: str, data: dict) -> Order:
+    return Order(
+        order_id=order_id,
+        customer_id=data.get("customer_id"),
+        status=data.get("status", ""),
+        date=data.get("date"),
+        items=data.get("items", []),
+        subtotal=data.get("subtotal"),
+        tax=data.get("tax"),
+        total=data.get("total"),
+        carrier=data.get("carrier"),
+        tracking_number=data.get("tracking_number"),
+        estimated_delivery=data.get("estimated_delivery"),
+        delivered_date=data.get("delivered_date"),
+        shipping_address=data.get("shipping_address"),
+        timeline=data.get("timeline", []),
+    )
+
+
+def _product_from_doc(product_id: str, data: dict) -> Product:
+    return Product(
+        product_id=product_id,
+        name=data.get("name", ""),
+        price=data.get("price", 0.0),
+        description=data.get("description"),
+        category=data.get("category"),
+        keywords=data.get("keywords", []),
+    )
+
+
+def _invoice_from_doc(invoice_id: str, data: dict) -> Invoice:
+    return Invoice(
+        invoice_id=invoice_id,
+        customer_id=data.get("customer_id"),
+        order_id=data.get("order_id"),
+        amount=data.get("amount"),
+        status=data.get("status"),
+    )
+
+
+def _payment_from_doc(order_id: str, data: dict) -> Payment:
+    return Payment(
+        order_id=order_id,
+        customer_id=data.get("customer_id"),
+        status=data.get("status"),
+        amount=data.get("amount"),
+    )
+
+
+class FirestoreProvider:
+    """Native Firestore backend — implements CommerceProvider."""
+
+    def __init__(self, provider_config: dict):
+        self._database_id = provider_config["database_id"]
+
+    @property
+    def _db(self):
+        return get_db_client(self._database_id)
+
+    def get_order(self, tenant_id: str, order_id: str) -> Optional[Order]:
+        doc = self._db.collection("orders").document(order_id).get()
+        if not doc.exists:
+            return None
+        return _order_from_doc(order_id, doc.to_dict())
+
+    def list_orders_for_customer(self, tenant_id: str, customer_id: str) -> list[Order]:
+        query = self._db.collection("orders").where("customer_id", "==", customer_id)
+        return [_order_from_doc(doc.id, doc.to_dict()) for doc in query.stream()]
+
+    def get_product(self, tenant_id: str, product_id: str) -> Optional[Product]:
+        doc = self._db.collection("products").document(product_id).get()
+        if not doc.exists:
+            return None
+        return _product_from_doc(product_id, doc.to_dict())
+
+    def get_inventory(self, tenant_id: str, product_id: str) -> Optional[int]:
+        doc = self._db.collection("inventory").document(product_id).get()
+        if not doc.exists:
+            return None
+        return doc.to_dict().get("quantity")
+
+    def get_invoice(self, tenant_id: str, invoice_id: str) -> Optional[Invoice]:
+        doc = self._db.collection("invoices").document(invoice_id).get()
+        if not doc.exists:
+            return None
+        return _invoice_from_doc(invoice_id, doc.to_dict())
+
+    def get_invoice_by_order(self, tenant_id: str, order_id: str) -> Optional[Invoice]:
+        query = self._db.collection("invoices").where("order_id", "==", order_id)
+        docs = list(query.stream())
+        if not docs:
+            return None
+        return _invoice_from_doc(docs[0].id, docs[0].to_dict())
+
+    def list_invoices_for_customer(self, tenant_id: str, customer_id: str) -> list[Invoice]:
+        query = self._db.collection("invoices").where("customer_id", "==", customer_id)
+        return [_invoice_from_doc(doc.id, doc.to_dict()) for doc in query.stream()]
+
+    def get_payment(self, tenant_id: str, order_id: str) -> Optional[Payment]:
+        doc = self._db.collection("payments").document(order_id).get()
+        if not doc.exists:
+            return None
+        return _payment_from_doc(order_id, doc.to_dict())
+
+    def list_payments_for_customer(self, tenant_id: str, customer_id: str) -> list[Payment]:
+        query = self._db.collection("payments").where("customer_id", "==", customer_id)
+        return [_payment_from_doc(doc.id, doc.to_dict()) for doc in query.stream()]
+
+    def list_refunds_for_order(self, tenant_id: str, order_id: str) -> list[dict]:
+        query = self._db.collection("refunds").where("order_id", "==", order_id)
+        return [doc.to_dict() for doc in query.stream()]
+
+    def search_products(self, tenant_id: str, query: str, limit: int = 5) -> list[Product]:
+        """RAG (semantic) search scoped to this tenant's database, with a
+        keyword fallback — ports the exact logic that used to live inline in
+        agents/product/tools.py's search_products, now tenant-scoped by
+        construction (get_rag_search(self._database_id) never touches
+        another tenant's embeddings; the keyword fallback queries self._db,
+        which is this tenant's Firestore database)."""
+        try:
+            rag = get_rag_search(self._database_id)
+            rag_results = rag.search(query, limit=limit)
+            if rag_results:
+                return [
+                    Product(
+                        product_id=r["id"],
+                        name=r.get("name", ""),
+                        price=r.get("price", 0.0),
+                        category=r.get("category"),
+                    )
+                    for r in rag_results
+                ]
+        except Exception as e:
+            logger.warning(
+                "[FirestoreProvider] RAG search failed for tenant %s: %s, falling back to keyword", tenant_id, e
+            )
+
+        query_lower = query.lower().strip()
+        search_terms = [query_lower]
+        if query_lower.endswith("s"):
+            search_terms.append(query_lower[:-1])
+        else:
+            search_terms.append(query_lower + "s")
+
+        results = []
+        for doc in self._db.collection("products").stream():
+            data = doc.to_dict()
+            name = data.get("name", "").lower()
+            category = data.get("category", "").lower()
+            keywords = data.get("keywords", [])
+            if any(term in name or term in category or term in keywords for term in search_terms):
+                results.append(_product_from_doc(doc.id, data))
+
+        return results[:limit]
+
+    def verify_order_ownership(
+        self, tenant_id: str, order_id: str, customer_id: str
+    ) -> tuple[bool, Optional[Order], str]:
+        order = self.get_order(tenant_id, order_id)
+        if order is None:
+            return False, None, f"Order {order_id} not found"
+        if order.customer_id != customer_id:
+            return False, None, f"You don't have permission to access order {order_id}"
+        return True, order, ""
+
+    def verify_invoice_ownership(
+        self, tenant_id: str, invoice_id: str, customer_id: str
+    ) -> tuple[bool, Optional[Invoice], str]:
+        invoice = self.get_invoice(tenant_id, invoice_id)
+        if invoice is None:
+            return False, None, f"Invoice {invoice_id} not found"
+        if invoice.customer_id != customer_id:
+            return False, None, f"You don't have permission to access invoice {invoice_id}"
+        return True, invoice, ""
+
+    def execute_refund(
+        self, tenant_id: str, order_id: str, customer_id: str, items: list[dict], amount: float
+    ) -> RefundResult:
+        """Write the final refunds record — called only after human approval
+        (backend/app/refund_approvals.py's approve_refund, Task 7). This is
+        the money-moving step; the FirestoreProvider's version just writes a
+        record (no real payment gateway is integrated yet — see project
+        memory real-production-project-not-demo.md). A ShopifyProvider's
+        execute_refund would call Shopify's real Refund API instead."""
+        refund_id = f"REF-{order_id.replace('ORD-', '')}-{uuid.uuid4().hex[:8]}"
+        now = datetime.now().isoformat()
+        self._db.collection("refunds").document(refund_id).set(
+            {
+                "refund_id": refund_id,
+                "order_id": order_id,
+                "customer_id": customer_id,
+                "status": "pending",
+                "items": items,
+                "total_refund_amount": amount,
+                "created_at": now,
+            }
+        )
+        logger.info("[FirestoreProvider] Executed refund %s for order %s: $%s", refund_id, order_id, amount)
+        return RefundResult(success=True, refund_id=refund_id, message="Refund recorded")

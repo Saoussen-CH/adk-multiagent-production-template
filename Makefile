@@ -156,6 +156,9 @@ test-tools: ## Run pure tool tests (no LLM, mocked Firestore) — fast
 		tests/unit/test_rag_search_multi_db.py \
 		tests/unit/test_tenancy_config.py \
 		tests/unit/test_tenancy_context.py \
+		tests/unit/test_firestore_provider.py \
+		tests/unit/test_provider_registry.py::test_get_provider_dispatches_firestore \
+		tests/unit/test_provider_registry.py::test_get_provider_unknown_provider_type_raises \
 		$(PYTEST_FLAGS)
 
 test-unit: ## Run unit agent eval (EVAL_PROFILE=fast|standard|full)

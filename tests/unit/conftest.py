@@ -132,6 +132,24 @@ def mock_db():
     return MockFirestoreClient()
 
 
+@pytest.fixture
+def mock_db_factory():
+    """Returns a callable producing a fresh, empty MockFirestoreClient per
+    call — used by multi-tenant tests that need genuinely separate
+    databases (not the shared session-scoped mock_db fixture)."""
+    from tests.mock_firestore import MockFirestoreClient
+
+    def _factory(_name: str) -> MockFirestoreClient:
+        client = MockFirestoreClient()
+        # Start empty — MockFirestoreClient normally pre-loads seed.py
+        # fixture data, which would leak unrelated demo orders/products
+        # into these isolation tests.
+        client._collections = {}
+        return client
+
+    return _factory
+
+
 @pytest.fixture(autouse=True)
 def mock_backends():
     """Apply mock Firestore + RAG backends for agent evaluation re-runs.
