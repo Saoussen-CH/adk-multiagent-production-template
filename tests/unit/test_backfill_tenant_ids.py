@@ -73,6 +73,24 @@ def _tenant_of(db, collection, doc_id):
     return db.collection(collection).document(doc_id).get().to_dict().get("tenant_id")
 
 
+def _snapshot_all(db):
+    """A deep snapshot of every document this script touches, including the
+    messages subcollection under each session — for asserting that a run
+    changed nothing at all, anywhere."""
+    snapshot = {
+        name: {doc.id: dict(doc.to_dict()) for doc in db.collection(name).stream()}
+        for name in ("users", "sessions", "tokens")
+    }
+    snapshot["sessions/*/messages"] = {
+        session.id: {
+            msg.id: dict(msg.to_dict())
+            for msg in db.collection("sessions").document(session.id).collection("messages").stream()
+        }
+        for session in db.collection("sessions").stream()
+    }
+    return snapshot
+
+
 def test_legacy_documents_are_stamped(db):
     _seed_mixed(db)
 
@@ -109,21 +127,17 @@ def test_already_stamped_documents_are_left_exactly_as_they_were(db):
 
 def test_running_twice_changes_nothing(db):
     """Idempotence: a one-off script that is not safe to re-run is a script
-    nobody can safely run at all."""
+    nobody can safely run at all. Covers the messages subcollection too — the
+    one with the extra foreign-session branch, and so the one most worth
+    checking for idempotency."""
     _seed_mixed(db)
 
     backfill_tenant_ids(db, TENANT)
-    snapshot_after_first = {
-        name: {doc.id: dict(doc.to_dict()) for doc in db.collection(name).stream()}
-        for name in ("users", "sessions", "tokens")
-    }
+    snapshot_after_first = _snapshot_all(db)
 
     second = backfill_tenant_ids(db, TENANT)
 
-    assert {
-        name: {doc.id: dict(doc.to_dict()) for doc in db.collection(name).stream()}
-        for name in ("users", "sessions", "tokens")
-    } == snapshot_after_first
+    assert _snapshot_all(db) == snapshot_after_first
     assert sum(r.stamped for r in second.values()) == 0
     assert second["users"].already_stamped == 2
 
@@ -142,6 +156,47 @@ def test_another_tenants_documents_are_never_re_stamped(db):
     assert _tenant_of(db, "users", "foreign-user") == OTHER_TENANT
     assert results["users"].foreign == 1
     assert results["users"].foreign_examples == ["users/foreign-user (tenant_id='other-tenant')"]
+
+
+def test_a_foreign_document_blocks_writes_to_every_other_document_too(db):
+    """The regression test for the ordering bug this backfill's two-phase
+    scan-then-write flow exists to fix.
+
+    `_seed_mixed` plants documents that genuinely need stamping (legacy-user,
+    legacy-token, legacy-session, and its two messages) alongside a foreign
+    document. A REAL (non-dry-run) invocation must not write to any of them —
+    not just leave the foreign one alone, which the old per-collection check
+    already did. If the scan finds a foreign document anywhere, a database
+    that mixes two tenants' data can no longer trust "no tenant_id" to mean
+    "our own untouched legacy document" — it could just as easily be the
+    other tenant's own not-yet-migrated document. Stamping it as ours would be
+    a silent, permanent misattribution, so the whole write phase must be
+    skipped, not merely the write to the document that tipped us off.
+    """
+    _seed_mixed(db)
+    db.collection("users").document("foreign-user").set(
+        {"user_id": "foreign-user", "email": "them@example.com", "tenant_id": OTHER_TENANT}
+    )
+    before = _snapshot_all(db)
+
+    results = backfill_tenant_ids(db, TENANT)  # real run, NOT dry_run
+
+    # The scan still found and reported the foreign document...
+    assert results["users"].foreign == 1
+    assert results["users"].foreign_examples == ["users/foreign-user (tenant_id='other-tenant')"]
+    # ...and it still saw legacy-user etc. as needing a stamp (that's the scan
+    # phase's classification, independent of whether the write phase runs)...
+    assert results["users"].stamped == 1
+    assert results["sessions"].stamped == 1
+    assert results["tokens"].stamped == 1
+    assert results["sessions/*/messages"].stamped == 2
+
+    # ...but NOTHING was actually written anywhere: not the foreign document,
+    # and not a single one of the legitimate un-stamped documents either.
+    assert _snapshot_all(db) == before
+    assert _tenant_of(db, "users", "legacy-user") is None
+    assert _tenant_of(db, "tokens", "legacy-token") is None
+    assert _tenant_of(db, "sessions", "legacy-session") is None
 
 
 def test_messages_under_a_foreign_session_are_left_alone(db):

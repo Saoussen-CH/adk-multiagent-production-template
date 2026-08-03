@@ -47,6 +47,25 @@ Rules
   The process exits non-zero so an operator sees it.
 - Messages under a foreign session are skipped with it, for the same reason.
 
+Scan before write
+-----------------
+Every collection (and the messages subcollection under every session) is
+scanned and classified FIRST, with no writes. Only if that scan finds zero
+foreign documents anywhere in the database does a second pass actually write
+the stamps — for a dry run, that second pass never runs at all; it just
+reports what it would have done.
+
+This ordering matters because a database containing so much as one
+foreign-tagged document can no longer be trusted to classify "no tenant_id"
+as "our tenant's legacy document" — it might just as easily be the *other*
+tenant's own not-yet-migrated document, indistinguishable by that field
+alone. So once contamination is confirmed anywhere, nothing gets written
+anywhere in that invocation, not just to the document that tipped it off.
+Writing collection-by-collection as you go — stamping "users" before you've
+even looked at "tokens" — would have already turned some of those ambiguous
+documents into permanent, silent misattributions by the time the foreign
+document surfaces.
+
 Usage:
     # from the repo root, with the target environment's .env loaded
     PYTHONPATH=. python ops/backfill_tenant_ids.py --tenant-id acme-electronics --dry-run
@@ -81,18 +100,21 @@ class BackfillResult:
         self.foreign_examples.extend(other.foreign_examples)
 
 
-def _backfill_collection(collection, tenant_id: str, label: str, dry_run: bool) -> BackfillResult:
-    """Stamp every un-stamped document in one collection reference.
+def _scan_collection(collection, tenant_id: str, label: str) -> tuple:
+    """Classify every document in one collection reference. Never writes.
 
-    Writes go through `collection.document(snapshot.id).update(...)` rather
-    than `snapshot.reference.update(...)`: both work against real Firestore,
-    but only the former also works against the in-memory client the tests use
-    (tests/mock_firestore.py's snapshots carry no `.reference`).
+    Returns `(result, to_stamp)`: the per-document tallies, plus the ids of
+    the documents that need `tenant_id` stamped — left for a caller-controlled
+    write pass to actually apply, once every collection has been scanned and
+    it is confirmed safe to write anything at all.
 
     The stream is drained into a list first — mutating documents while
-    iterating a live query is asking for trouble on either backend.
+    iterating a live query is asking for trouble on either backend, and this
+    function does not mutate anyway, but the same helper is reused to collect
+    ids for the write pass that follows.
     """
     result = BackfillResult()
+    to_stamp: list = []
 
     for snapshot in list(collection.stream()):
         data = snapshot.to_dict() or {}
@@ -108,15 +130,40 @@ def _backfill_collection(collection, tenant_id: str, label: str, dry_run: bool) 
             print(f"   ⚠️  {label}/{snapshot.id} belongs to tenant {existing!r} — left untouched")
             continue
 
-        if not dry_run:
-            collection.document(snapshot.id).update({"tenant_id": tenant_id})
         result.stamped += 1
+        to_stamp.append(snapshot.id)
 
-    return result
+    return result, to_stamp
+
+
+def _stamp_documents(collection, doc_ids: list, tenant_id: str) -> None:
+    """Write `tenant_id` onto exactly the documents the scan phase found
+    un-stamped — nothing else.
+
+    Writes go through `collection.document(doc_id).update(...)` rather than
+    `snapshot.reference.update(...)`: both work against real Firestore, but
+    only the former also works against the in-memory client the tests use
+    (tests/mock_firestore.py's snapshots carry no `.reference`).
+    """
+    for doc_id in doc_ids:
+        collection.document(doc_id).update({"tenant_id": tenant_id})
 
 
 def backfill_tenant_ids(db, tenant_id: str, dry_run: bool = False) -> dict:
     """Stamp `tenant_id` onto every un-stamped account document in `db`.
+
+    Two phases, in this order, across the WHOLE database — never per
+    collection:
+
+    1. Scan every collection (and every session's messages subcollection),
+       classifying each document. Nothing is written in this phase.
+    2. Only if that scan found zero foreign documents anywhere does a write
+       pass run, stamping exactly the documents the scan flagged as needing
+       it. A dry run skips this phase entirely and just reports.
+
+    See the module docstring ("Scan before write") for why a foreign document
+    found in, say, "tokens" must block writes to "users" too, not just to
+    itself.
 
     Args:
         db: a Firestore client already bound to THIS tenant's database.
@@ -128,12 +175,17 @@ def backfill_tenant_ids(db, tenant_id: str, dry_run: bool = False) -> dict:
         "sessions/*/messages" label for the messages subcollections.
     """
     results: dict = {}
+    # label -> (collection_ref, [doc_ids to stamp]), built during the scan
+    # phase and only consumed if the write phase actually runs.
+    pending: dict = {}
 
     for name in ACCOUNT_COLLECTIONS:
         print(f"\n📁 {name}")
-        results[name] = _backfill_collection(db.collection(name), tenant_id, name, dry_run)
-        r = results[name]
-        print(f"   stamped={r.stamped} already={r.already_stamped} foreign={r.foreign}")
+        collection = db.collection(name)
+        result, to_stamp = _scan_collection(collection, tenant_id, name)
+        results[name] = result
+        pending[name] = (collection, to_stamp)
+        print(f"   stamped={result.stamped} already={result.already_stamped} foreign={result.foreign}")
 
     # Messages live in a subcollection under each session, so they are reached
     # per session rather than by a collection-group query — which keeps this
@@ -141,17 +193,34 @@ def backfill_tenant_ids(db, tenant_id: str, dry_run: bool = False) -> dict:
     # collection-group index on a one-off job.
     print(f"\n📁 {SESSIONS_COLLECTION}/*/{MESSAGES_SUBCOLLECTION}")
     messages = BackfillResult()
+    messages_label = f"{SESSIONS_COLLECTION}/*/{MESSAGES_SUBCOLLECTION}"
     for snapshot in list(db.collection(SESSIONS_COLLECTION).stream()):
         session_tenant = (snapshot.to_dict() or {}).get("tenant_id")
         if session_tenant is not None and session_tenant != tenant_id:
-            # Another tenant's session: its transcript is theirs too.
+            # Another tenant's session: its transcript is theirs too. Not
+            # scanned at all, so it can never end up in `pending` either.
             print(f"   ⚠️  skipping messages of foreign session {snapshot.id} (tenant_id={session_tenant!r})")
             continue
         label = f"{SESSIONS_COLLECTION}/{snapshot.id}/{MESSAGES_SUBCOLLECTION}"
         sub = db.collection(SESSIONS_COLLECTION).document(snapshot.id).collection(MESSAGES_SUBCOLLECTION)
-        messages.merge(_backfill_collection(sub, tenant_id, label, dry_run))
+        result, to_stamp = _scan_collection(sub, tenant_id, label)
+        messages.merge(result)
+        pending[label] = (sub, to_stamp)
     print(f"   stamped={messages.stamped} already={messages.already_stamped} foreign={messages.foreign}")
-    results[f"{SESSIONS_COLLECTION}/*/{MESSAGES_SUBCOLLECTION}"] = messages
+    results[messages_label] = messages
+
+    # Abort phase: if the scan found a foreign document ANYWHERE, stop here
+    # — before writing a single document, in a real run or a dry run alike.
+    # A dry run would not have written anyway; a real run must not, because
+    # by now we know this database may hold another tenant's still-unstamped
+    # documents too, indistinguishable from ours by `tenant_id` alone.
+    total_foreign = sum(result.foreign for result in results.values())
+    if total_foreign or dry_run:
+        return results
+
+    # Write phase: only reached with zero foreign documents found anywhere.
+    for collection, to_stamp in pending.values():
+        _stamp_documents(collection, to_stamp, tenant_id)
 
     return results
 
@@ -185,7 +254,10 @@ def _print_summary(results: dict, dry_run: bool) -> int:
         total.merge(result)
 
     print("\n" + "=" * 60)
-    verb = "would stamp" if dry_run else "stamped"
+    # A foreign document anywhere aborts the write phase entirely (see
+    # backfill_tenant_ids), so "stamped" below is a candidate count, not an
+    # applied one, whenever foreign > 0 — same as a dry run.
+    verb = "would stamp" if (dry_run or total.foreign) else "stamped"
     print(f"{verb}: {total.stamped}   already stamped: {total.already_stamped}   foreign: {total.foreign}")
     print("=" * 60)
 
