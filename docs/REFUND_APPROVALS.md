@@ -52,16 +52,46 @@ FastAPI dependency in `backend/app/main.py`:
 
 | Method | Path | Description |
 |--------|------|--------------|
-| `GET`  | `/api/admin/refunds/pending` | List all `PENDING_APPROVAL` refund requests. |
-| `POST` | `/api/admin/refunds/{request_id}/approve` | Approve a request and execute the refund. |
-| `POST` | `/api/admin/refunds/{request_id}/reject` | Reject a request. Body: `{"note": str}` (optional). |
+| `GET`  | `/api/admin/refunds/pending?tenant_id=<id>` | List that tenant's `PENDING_APPROVAL` refund requests. |
+| `POST` | `/api/admin/refunds/{request_id}/approve?tenant_id=<id>` | Approve a request and execute the refund. |
+| `POST` | `/api/admin/refunds/{request_id}/reject?tenant_id=<id>` | Reject a request. Body: `{"note": str}` (optional). |
+
+### `tenant_id` is required on all three
+
+There is no default tenant. `process_refund` stages its `PENDING_APPROVAL`
+document into the **requesting tenant's own Firestore database** (the one
+behind `get_provider(tenant_id)._db`), so the API cannot even locate a
+request without knowing which tenant it belongs to. It is a query parameter
+rather than something inferred from the `request_id`, because the document
+has to be found before it can be read — and for `pending` there is no
+document to infer from at all.
+
+The supplied `tenant_id` is then matched against each document's own
+`tenant_id` field, so acting on another tenant's `request_id` is reported as
+`404` (not a distinct error — an approver must not be able to probe whether
+an id exists under a different tenant) and never results in a cross-tenant
+write.
+
+Two extra failure modes come from tenant resolution itself:
+
+| HTTP status | Meaning |
+|-------------|---------|
+| `404` | Unknown `tenant_id` — no `tenants/{tenant_id}` document exists. |
+| `501` | The tenant's provider has no refund-request store of its own (a Shopify-backed tenant). Refund staging is this product's workflow layer, not something Shopify hosts. |
+
+> **Known gap:** user documents carry no `tenant_id` today, so
+> `require_approver_for_tenant` can only enforce the tenant match for users
+> that have one — any approver-role user can still address any tenant's
+> queue. Closing this needs a tenant-membership model on users (or
+> per-tenant approver roles); the check is already written so that adding
+> the field to user docs is a data change rather than a code change.
 
 `ApprovalError` codes from `backend/app/refund_approvals.py` map to HTTP
 status as follows:
 
 | Code | HTTP status | Meaning |
 |------|-------------|---------|
-| `not_found` | 404 | No `refund_requests` doc with that `request_id`. |
+| `not_found` | 404 | No `refund_requests` doc with that `request_id` **for that tenant**. |
 | `not_pending` | 409 | Already approved/rejected/expired — idempotency gate against double-refunding. |
 | `self_approval` | 403 | Dual control: the approver cannot be the original requester (approve only). |
 | anything else | 400 | Fallback. |
@@ -71,7 +101,7 @@ status as follows:
 ```bash
 curl -X POST \
   -H "Authorization: Bearer $APPROVER_TOKEN" \
-  "https://<backend-url>/api/admin/refunds/REFREQ-abc123/approve"
+  "https://<backend-url>/api/admin/refunds/REFREQ-abc123/approve?tenant_id=acme-electronics"
 ```
 
 ### Example: reject a request with a note
@@ -81,7 +111,7 @@ curl -X POST \
   -H "Authorization: Bearer $APPROVER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"note": "No evidence of damage provided"}' \
-  "https://<backend-url>/api/admin/refunds/REFREQ-abc123/reject"
+  "https://<backend-url>/api/admin/refunds/REFREQ-abc123/reject?tenant_id=acme-electronics"
 ```
 
 ## Approver UI
@@ -89,7 +119,8 @@ curl -X POST \
 `frontend/src/components/RefundApprovals.tsx` is a minimal, self-hiding
 banner mounted unconditionally in `MainApp.tsx` (there is no `role` field
 anywhere in the frontend's auth flow to gate it on client-side). On mount it
-calls `GET /api/admin/refunds/pending`:
+calls `GET /api/admin/refunds/pending` (passing the same `tenant_id` the chat
+widget uses — `VITE_TENANT_ID`, see `frontend/src/services/api.ts`):
 
 - **200** → renders a collapsible list of pending requests (order id,
   amount, reason, requested-at) with **Approve** / **Reject** buttons. A

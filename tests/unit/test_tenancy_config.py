@@ -7,9 +7,9 @@ import pytest
 def _reset_tenant_cache():
     from customer_support_mas.tenancy import config as config_module
 
-    config_module._tenant_config_cache.clear()
+    config_module.invalidate_tenant_config_cache()
     yield
-    config_module._tenant_config_cache.clear()
+    config_module.invalidate_tenant_config_cache()
 
 
 def _seed_tenant(mock_db, tenant_id, **overrides):

@@ -126,6 +126,11 @@ def load_tenant_config(tenant_id: str) -> TenantConfig:
     # whole-collection validation — but it is the check that fires on the
     # request that would actually have caused the leak, which is the one
     # that matters at runtime.
+    #
+    # Note the flip side: because the index has no TTL, retiring a tenant and
+    # re-using its database_id for a different tenant within the life of one
+    # process is (correctly) refused until invalidate_tenant_config_cache()
+    # is called. Tenant offboarding is an operator action, not a hot path.
     key = isolation_key(config)
     if key is not None:
         owner = _datastore_owner.get(key)

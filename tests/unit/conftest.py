@@ -231,7 +231,7 @@ def _seed_default_test_tenant(mock_db):
     reachable under a real tenant_id without duplicating it per test."""
     from customer_support_mas.tenancy import config as config_module
 
-    config_module._tenant_config_cache.clear()
+    config_module.invalidate_tenant_config_cache()
     mock_db.collection("tenants").document("test-tenant").set(
         {
             "tenant_id": "test-tenant",
@@ -243,7 +243,7 @@ def _seed_default_test_tenant(mock_db):
         }
     )
     yield
-    config_module._tenant_config_cache.clear()
+    config_module.invalidate_tenant_config_cache()
 
 
 @pytest.fixture

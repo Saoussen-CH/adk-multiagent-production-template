@@ -9,7 +9,7 @@ def test_get_provider_dispatches_firestore(mock_db, monkeypatch):
     from customer_support_mas.providers.registry import get_provider
     from customer_support_mas.tenancy import config as config_module
 
-    config_module._tenant_config_cache.clear()
+    config_module.invalidate_tenant_config_cache()
     monkeypatch.setattr("customer_support_mas.tenancy.config.get_db_client", lambda *_: mock_db)
     mock_db.collection("tenants").document("tenant-fs").set(
         {
@@ -31,7 +31,7 @@ def test_get_provider_dispatches_shopify(mock_db, monkeypatch):
     from customer_support_mas.providers.shopify_provider import ShopifyProvider
     from customer_support_mas.tenancy import config as config_module
 
-    config_module._tenant_config_cache.clear()
+    config_module.invalidate_tenant_config_cache()
     monkeypatch.setattr("customer_support_mas.tenancy.config.get_db_client", lambda *_: mock_db)
     mock_db.collection("tenants").document("tenant-shop").set(
         {
@@ -51,7 +51,7 @@ def test_get_provider_unknown_provider_type_raises(mock_db, monkeypatch):
     from customer_support_mas.providers.registry import get_provider
     from customer_support_mas.tenancy import config as config_module
 
-    config_module._tenant_config_cache.clear()
+    config_module.invalidate_tenant_config_cache()
     monkeypatch.setattr("customer_support_mas.tenancy.config.get_db_client", lambda *_: mock_db)
     mock_db.collection("tenants").document("tenant-bad").set(
         {"tenant_id": "tenant-bad", "tier": "light", "provider_type": "bigcommerce", "provider_config": {}}

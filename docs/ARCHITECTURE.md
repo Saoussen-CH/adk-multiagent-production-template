@@ -14,6 +14,33 @@ The system consists of multiple layers:
 - **AI Layer** - Vertex AI Agent Engine with multi-agent system
 - **Data Layer** - Firestore for products, orders, sessions, and Memory Bank
 
+## Multi-tenancy: `tenant_id` is required everywhere
+
+This is a multi-merchant product. **There is no default or implicit tenant
+anywhere in the system**, and this is enforced rather than documented:
+
+- `POST /api/chat` requires a `tenant_id` in the request body. The backend
+  resolves it via `load_tenant_config()` before anything else uses it; an
+  unknown value is a `404`, never a fallback.
+- The resolved `tenant_id` is written into ADK session state once, at session
+  creation (`backend/app/agent_client.py`), and every tool reads it back with
+  `get_tenant_id(tool_context)`, which raises `MissingTenantError` if absent.
+  It is never an LLM-supplied tool argument.
+- Every `CommerceProvider` method takes `tenant_id` as its first argument.
+  `get_provider(tenant_id)` picks the implementation (`FirestoreProvider`,
+  `ShopifyProvider`) from that tenant's config.
+- Light-tier isolation is **physical**: one named Firestore database per
+  tenant inside a shared pool project. Two tenants in one pool resolving to
+  the same `database_id` is refused with `TenantConfigConflictError` — see
+  `customer_support_mas/tenancy/config.py` and the release-gate suite in
+  `tests/unit/test_cross_tenant_isolation.py`.
+- Anything that creates a session must supply it: the frontend
+  (`VITE_TENANT_ID`), the smoke tests, `tests/eval_vertex.py`, and both eval
+  dataset generators. Recorded eval datasets carry it in
+  `session_input.state`.
+
+Full design: `docs/superpowers/specs/2026-08-02-multi-tenant-provider-architecture-design.md`.
+
 ## System Overview
 
 ```mermaid

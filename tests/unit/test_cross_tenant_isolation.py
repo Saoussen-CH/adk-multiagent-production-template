@@ -51,7 +51,7 @@ def seeded_tenant_config_a(mock_db):
     """
     from customer_support_mas.tenancy import config as config_module
 
-    config_module._tenant_config_cache.clear()
+    config_module.invalidate_tenant_config_cache()
     mock_db.collection("tenants").document("tenant-a").set(
         {
             "tenant_id": "tenant-a",
@@ -63,7 +63,7 @@ def seeded_tenant_config_a(mock_db):
         }
     )
     yield
-    config_module._tenant_config_cache.clear()
+    config_module.invalidate_tenant_config_cache()
 
 
 def test_same_order_id_resolves_to_different_data_per_tenant(isolated_tenants):
