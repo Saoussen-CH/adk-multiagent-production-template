@@ -204,6 +204,22 @@ class Database:
         and can only have been written by the tenant that owns the database
         it is sitting in. Rejecting those would lock existing users out of
         their own accounts at deploy time.
+
+        That leniency is transitional, and `ops/backfill_tenant_ids.py` now
+        exists to end it: it stamps every un-stamped `users` / `sessions` /
+        `tokens` / `sessions/*/messages` document in one tenant's database
+        with that tenant's id. Run it for **every** tenant before tightening
+        the `doc_tenant is None` case below to `return False`.
+
+        Until then the leniency is load-bearing in a way that is worth being
+        explicit about: "can only have been written by the tenant that owns
+        the database" holds only while that ownership has never changed.
+        `provider_config.database_id` may be re-pointed at another tenant
+        (customer_support_mas/tenancy/config.py permits it after
+        `invalidate_tenant_config_cache()`), e.g. when a tenant is retired and
+        its database re-used — and the new tenant would then inherit every
+        un-stamped document in it, with this check disabled by exactly the
+        `None` branch. Backfilling first is what makes such a re-point safe.
         """
         if data is None:
             return False

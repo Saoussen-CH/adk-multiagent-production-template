@@ -130,6 +130,12 @@ vector-index: ## Create Firestore vector index for semantic search (use ENV=stag
 	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
 	set -a && . ./$(ENV_FILE) && set +a && PYTHONPATH=. $(PYTHON) ops/create_vector_index.py
 
+backfill-tenant-ids: ## One-off: stamp tenant_id onto legacy account docs (TENANT=id [DRY_RUN=1], use ENV=staging|prod)
+	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
+	@test -n "$(TENANT)" || (echo "TENANT=<tenant_id> is required — there is no default tenant" && exit 1)
+	set -a && . ./$(ENV_FILE) && set +a && PYTHONPATH=. $(PYTHON) ops/backfill_tenant_ids.py \
+		--tenant-id $(TENANT) $(if $(DRY_RUN),--dry-run,)
+
 # ==============================================================================
 # LINT & FORMAT
 # ==============================================================================
@@ -170,6 +176,8 @@ test-tools: ## Run pure tool tests (no LLM, mocked Firestore) — fast
 		tests/unit/test_eval_tenant_wiring.py \
 		tests/unit/test_backend_tenant_isolation.py \
 		tests/unit/test_chat_tenant_validation.py \
+		tests/unit/test_tenant_existence_oracle.py \
+		tests/unit/test_backfill_tenant_ids.py \
 		$(PYTEST_FLAGS)
 
 test-unit: ## Run unit agent eval (EVAL_PROFILE=fast|standard|full)
