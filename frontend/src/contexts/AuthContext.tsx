@@ -5,30 +5,55 @@ import { currentTenantId } from '../services/api';
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  isAuthenticated: boolean;
   isLoading: boolean;
+  showLoginScreen: boolean;
+  openLoginScreen: () => void;
+  closeLoginScreen: () => void;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, name: string, password: string) => Promise<void>;
-  loginAsAnonymous: () => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+async function createAnonymousSession(): Promise<{ user: User; token: string }> {
+  const response = await fetch('/api/auth/anonymous', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: currentTenantId() }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to start a chat session');
+  }
+
+  const data: AnonymousUserResponse = await response.json();
+  return {
+    user: { user_id: data.user_id, is_anonymous: true },
+    token: data.token,
+  };
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [showLoginScreen, setShowLoginScreen] = useState(false);
 
-  // Load user from localStorage on mount
+  // On load: use a stored session if there is one, otherwise silently start
+  // an anonymous one. There is no visible gate — the visitor always lands
+  // in a ready chat, whether that's a returning session or a brand-new
+  // anonymous one.
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
     const storedToken = localStorage.getItem('token');
 
-    if (storedUser) {
+    if (storedUser && storedToken) {
       try {
         setUser(JSON.parse(storedUser));
         setToken(storedToken);
+        setIsLoading(false);
+        return;
       } catch (error) {
         console.error('Failed to parse stored user:', error);
         localStorage.removeItem('user');
@@ -36,16 +61,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    setIsLoading(false);
+    createAnonymousSession()
+      .then(({ user: anonUser, token: anonToken }) => {
+        setUser(anonUser);
+        setToken(anonToken);
+        localStorage.setItem('user', JSON.stringify(anonUser));
+        localStorage.setItem('token', anonToken);
+      })
+      .catch((error) => {
+        console.error('Failed to start anonymous session:', error);
+      })
+      .finally(() => setIsLoading(false));
   }, []);
 
   const login = async (email: string, password: string) => {
     const response = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // tenant_id: accounts are per-merchant. The same email under another
-      // merchant is a different account in a different Firestore database,
-      // so the backend cannot look this user up without knowing which.
       body: JSON.stringify({ email, password, tenant_id: currentTenantId() }),
     });
 
@@ -55,18 +87,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const data: AuthResponse = await response.json();
+    const loggedInUser: User = { user_id: data.user_id, email: data.email, name: data.name, is_anonymous: false };
 
-    const user: User = {
-      user_id: data.user_id,
-      email: data.email,
-      name: data.name,
-      is_anonymous: false,
-    };
-
-    setUser(user);
+    setUser(loggedInUser);
     setToken(data.token);
-    localStorage.setItem('user', JSON.stringify(user));
+    localStorage.setItem('user', JSON.stringify(loggedInUser));
     localStorage.setItem('token', data.token);
+    setShowLoginScreen(false);
   };
 
   const register = async (email: string, name: string, password: string) => {
@@ -82,60 +109,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const data: AuthResponse = await response.json();
+    const registeredUser: User = { user_id: data.user_id, email: data.email, name: data.name, is_anonymous: false };
 
-    const user: User = {
-      user_id: data.user_id,
-      email: data.email,
-      name: data.name,
-      is_anonymous: false,
-    };
-
-    setUser(user);
+    setUser(registeredUser);
     setToken(data.token);
-    localStorage.setItem('user', JSON.stringify(user));
+    localStorage.setItem('user', JSON.stringify(registeredUser));
     localStorage.setItem('token', data.token);
+    setShowLoginScreen(false);
   };
 
-  const loginAsAnonymous = async () => {
-    const response = await fetch('/api/auth/anonymous', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenant_id: currentTenantId() }),
-    });
+  const logout = async () => {
+    localStorage.removeItem('currentSessionId');
 
-    if (!response.ok) {
-      throw new Error('Failed to create anonymous user');
+    // Drop straight back into a fresh anonymous session rather than a
+    // visible gate — logging out of a registered account should feel like
+    // "back to guest," not "locked out."
+    setIsLoading(true);
+    try {
+      const { user: anonUser, token: anonToken } = await createAnonymousSession();
+      setUser(anonUser);
+      setToken(anonToken);
+      localStorage.setItem('user', JSON.stringify(anonUser));
+      localStorage.setItem('token', anonToken);
+    } catch (error) {
+      console.error('Failed to start anonymous session after logout:', error);
+      setUser(null);
+      setToken(null);
+      localStorage.removeItem('user');
+      localStorage.removeItem('token');
+    } finally {
+      setIsLoading(false);
     }
-
-    const data: AnonymousUserResponse = await response.json();
-
-    const user: User = {
-      user_id: data.user_id,
-      is_anonymous: true,
-    };
-
-    setUser(user);
-    setToken(null);
-    localStorage.setItem('user', JSON.stringify(user));
-    localStorage.removeItem('token');
-  };
-
-  const logout = () => {
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem('user');
-    localStorage.removeItem('token');
-    localStorage.removeItem('currentSessionId'); // Clear current session
   };
 
   const value: AuthContextType = {
     user,
     token,
-    isAuthenticated: !!user && !user.is_anonymous,
     isLoading,
+    showLoginScreen,
+    openLoginScreen: () => setShowLoginScreen(true),
+    closeLoginScreen: () => setShowLoginScreen(false),
     login,
     register,
-    loginAsAnonymous,
     logout,
   };
 

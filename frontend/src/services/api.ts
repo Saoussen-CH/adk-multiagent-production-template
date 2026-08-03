@@ -135,25 +135,13 @@ export function currentTenantId(tenantId?: string): string {
 
 // Helper to get auth headers
 function getAuthHeaders(): Record<string, string> {
-  const user = localStorage.getItem('user');
   const token = localStorage.getItem('token');
 
-  if (!user) {
-    throw new Error('No user found. Please login or create anonymous user.');
+  if (!token) {
+    throw new Error('No active session. Please reload the page.');
   }
 
-  const userData = JSON.parse(user);
-  const headers: Record<string, string> = {};
-
-  if (token && !userData.is_anonymous) {
-    // Authenticated user
-    headers['Authorization'] = `Bearer ${token}`;
-  } else {
-    // Anonymous user
-    headers['X-User-Id'] = userData.user_id;
-  }
-
-  return headers;
+  return { Authorization: `Bearer ${token}` };
 }
 
 // =============================================================================

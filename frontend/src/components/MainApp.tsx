@@ -6,7 +6,7 @@ import ChatInterface from './ChatInterface';
 import RefundApprovals from './RefundApprovals';
 
 export default function MainApp() {
-  const { user, isLoading, logout } = useAuth();
+  const { user, isLoading, showLoginScreen, openLoginScreen, closeLoginScreen, logout } = useAuth();
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -61,9 +61,9 @@ export default function MainApp() {
     setCurrentSessionId(sessionId);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setCurrentSessionId(null);
-    logout();
+    await logout();
   };
 
   if (isLoading) {
@@ -75,8 +75,10 @@ export default function MainApp() {
     );
   }
 
-  if (!user) {
-    return <AuthScreen />;
+  if (!user) return null;
+
+  if (showLoginScreen) {
+    return <AuthScreen onCancel={closeLoginScreen} />;
   }
 
   return (
@@ -120,6 +122,17 @@ export default function MainApp() {
                     )}
                   </div>
                   <div className="user-menu-divider"></div>
+                  {user.is_anonymous && (
+                    <button
+                      className="user-menu-item"
+                      onClick={() => {
+                        setShowUserMenu(false);
+                        openLoginScreen();
+                      }}
+                    >
+                      Sign in
+                    </button>
+                  )}
                   <button
                     className="user-menu-item"
                     onClick={handleLogout}

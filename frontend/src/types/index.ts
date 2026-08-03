@@ -38,6 +38,7 @@ export interface AnonymousUserRequest {
 
 export interface AnonymousUserResponse {
   user_id: string;
+  token: string;
   is_anonymous: boolean;
 }
 

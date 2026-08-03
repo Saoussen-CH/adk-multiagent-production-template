@@ -1,10 +1,14 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
-type AuthMode = 'login' | 'register' | 'anonymous';
+type AuthMode = 'login' | 'register';
 
-export default function AuthScreen() {
-  const { login, register, loginAsAnonymous } = useAuth();
+interface AuthScreenProps {
+  onCancel?: () => void;
+}
+
+export default function AuthScreen({ onCancel }: AuthScreenProps) {
+  const { login, register } = useAuth();
   const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -20,7 +24,7 @@ export default function AuthScreen() {
     try {
       if (mode === 'login') {
         await login(email, password);
-      } else if (mode === 'register') {
+      } else {
         if (!name.trim()) {
           throw new Error('Name is required');
         }
@@ -33,25 +37,12 @@ export default function AuthScreen() {
     }
   };
 
-  const handleAnonymous = async () => {
-    setError('');
-    setIsLoading(true);
-
-    try {
-      await loginAsAnonymous();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create anonymous session');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   return (
     <div className="auth-screen">
       <div className="auth-container">
         <div className="auth-header">
           <h1>Customer Support Chat</h1>
-          <p>Sign in to continue or try as guest</p>
+          <p>Sign in to save your order history and past conversations</p>
         </div>
 
         <div className="auth-tabs">
@@ -115,26 +106,16 @@ export default function AuthScreen() {
 
           {error && <div className="auth-error">{error}</div>}
 
-          <button
-            type="submit"
-            className="auth-submit"
-            disabled={isLoading}
-          >
+          <button type="submit" className="auth-submit" disabled={isLoading}>
             {isLoading ? 'Please wait...' : mode === 'login' ? 'Login' : 'Create Account'}
           </button>
         </form>
 
-        <div className="auth-divider">
-          <span>or</span>
-        </div>
-
-        <button
-          className="auth-anonymous"
-          onClick={handleAnonymous}
-          disabled={isLoading}
-        >
-          Continue as Guest
-        </button>
+        {onCancel && (
+          <button className="auth-anonymous" onClick={onCancel} disabled={isLoading}>
+            Continue as guest
+          </button>
+        )}
       </div>
     </div>
   );
