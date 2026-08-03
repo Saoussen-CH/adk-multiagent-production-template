@@ -72,10 +72,13 @@ def requires_order_ownership(func: Callable) -> Callable:
             return {"status": "error", "message": f"Order {order_id} not found"}
 
         if order.customer_id != user_id:
-            audit_log(user_id, action, "order", order_id, False, f"Belongs to {order.customer_id}")
-            return {"status": "error", "message": f"You don't have permission to access order {order_id}"}
-
-        audit_log(user_id, action, "order", order_id, True)
+            verified_order_ids = tool_context.state.get("verified_order_ids", [])
+            if order_id not in verified_order_ids:
+                audit_log(user_id, action, "order", order_id, False, f"Belongs to {order.customer_id}")
+                return {"status": "error", "message": f"You don't have permission to access order {order_id}"}
+            audit_log(user_id, action, "order", order_id, True, "via conversation-scoped order verification")
+        else:
+            audit_log(user_id, action, "order", order_id, True)
 
         kwargs["_order_data"] = _order_to_dict(order)
         kwargs["_order_id"] = order_id
@@ -168,7 +171,11 @@ def requires_authenticated_user(func: Callable) -> Callable:
 
 
 def verify_order_ownership(
-    order_id: str, user_id: str, tenant_id: str, action: str = "access"
+    order_id: str,
+    user_id: str,
+    tenant_id: str,
+    action: str = "access",
+    verified_order_ids: Optional[list[str]] = None,
 ) -> tuple[bool, Optional[dict], str]:
     """Verify that an order belongs to the authenticated user, for workflow
     tools where decorators don't fit (SequentialAgent tools controlling
@@ -176,6 +183,13 @@ def verify_order_ownership(
 
     tenant_id is now a required keyword argument — every call site in
     refund/tools.py is updated in Task 6 to pass it via get_tenant_id(tool_context).
+
+    `verified_order_ids` is the conversation-scoped grant from
+    verify_order_access (tool_context.state["verified_order_ids"]) — an
+    order in that list is authorized even for a caller whose user_id
+    doesn't match the order's customer_id, but ONLY for that specific
+    order_id. Optional and defaults to none, so existing call sites that
+    don't yet thread it through keep their current (correct) behavior.
     """
     provider = get_provider(tenant_id)
     order = provider.get_order(tenant_id, order_id)
@@ -185,10 +199,13 @@ def verify_order_ownership(
         return False, None, f"Order {order_id} not found"
 
     if order.customer_id != user_id:
-        audit_log(user_id, action, "order", order_id, False, f"Belongs to {order.customer_id}")
-        return False, None, f"You don't have permission to access order {order_id}"
+        if not verified_order_ids or order_id not in verified_order_ids:
+            audit_log(user_id, action, "order", order_id, False, f"Belongs to {order.customer_id}")
+            return False, None, f"You don't have permission to access order {order_id}"
+        audit_log(user_id, action, "order", order_id, True, "via conversation-scoped order verification")
+    else:
+        audit_log(user_id, action, "order", order_id, True)
 
-    audit_log(user_id, action, "order", order_id, True)
     return True, _order_to_dict(order), ""
 
 
