@@ -8,19 +8,43 @@ from pydantic import BaseModel, EmailStr, Field
 # =============================================================================
 
 
+# Shared description for the tenant_id field on every auth request body.
+# Accounts are per-merchant: the same email registering with two merchants
+# creates two independent accounts in two different Firestore databases, so
+# every auth call has to say which merchant it is for. There is no default.
+_TENANT_ID_FIELD_DESC = (
+    "Which merchant/tenant this account belongs to. Accounts are scoped per "
+    "tenant — the same email under a different tenant is a different account. "
+    "Required; there is no default tenant."
+)
+
+
 class RegisterRequest(BaseModel):
-    """Register a new user account."""
+    """Register a new user account with one merchant."""
 
     email: EmailStr = Field(..., description="User email address")
     name: str = Field(..., min_length=1, max_length=100, description="User display name")
     password: str = Field(..., min_length=8, description="Password (min 8 characters)")
+    tenant_id: str = Field(..., description=_TENANT_ID_FIELD_DESC)
 
 
 class LoginRequest(BaseModel):
-    """Login with email and password."""
+    """Login with email and password, against one merchant's accounts."""
 
     email: EmailStr = Field(..., description="User email address")
     password: str = Field(..., description="Password")
+    tenant_id: str = Field(..., description=_TENANT_ID_FIELD_DESC)
+
+
+class AnonymousUserRequest(BaseModel):
+    """Create an anonymous user under one merchant.
+
+    This endpoint used to take no body at all. It needs one now: an anonymous
+    user document is written to the tenant's own database, so the tenant has
+    to be named before the account can be created.
+    """
+
+    tenant_id: str = Field(..., description=_TENANT_ID_FIELD_DESC)
 
 
 class AuthResponse(BaseModel):

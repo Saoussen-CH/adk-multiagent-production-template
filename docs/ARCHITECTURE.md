@@ -30,17 +30,45 @@ anywhere in the system**, and this is enforced rather than documented:
   `get_provider(tenant_id)` picks the implementation (`FirestoreProvider`,
   `ShopifyProvider`) from that tenant's config.
 - Light-tier isolation is **physical**: one named Firestore database per
-  tenant inside a shared pool project. This applies to commerce data
-  (orders, products, invoices, refunds) only — the backend's own
-  `users`/`sessions`/`tokens`/`messages` collections still live in one
-  shared database with no `tenant_id` at all. Two tenants in one pool
-  resolving to the same `database_id` is refused with
-  `TenantConfigConflictError` — see `customer_support_mas/tenancy/config.py`
-  and the release-gate suite in `tests/unit/test_cross_tenant_isolation.py`.
+  tenant inside a shared pool project. This covers commerce data (orders,
+  products, invoices, refunds) *and* the backend's own account layer —
+  `users`, `sessions`, `tokens` and each session's `messages` live in the
+  same per-tenant database, resolved through the same
+  `load_tenant_config()` / `get_db_client()` machinery
+  (`customer_support_mas.tenancy.config.account_database`,
+  `backend/app/database.py`'s `get_tenant_database`). Two tenants in one
+  pool resolving to the same database — for either store — is refused with
+  `TenantConfigConflictError`; see `customer_support_mas/tenancy/config.py`
+  and the release-gate suites in `tests/unit/test_cross_tenant_isolation.py`
+  and `tests/unit/test_backend_tenant_isolation.py`.
+- Accounts are therefore **per merchant**: the same email address signing up
+  with Merchant A and Merchant B is two independent accounts, with separate
+  passwords, sessions and auth tokens. This is not a filter rule to
+  remember — the two documents are in different databases and no query can
+  return both.
+- Because auth tokens live in their tenant's database, **`tenant_id` has to
+  be resolved before a token can be verified**. Every account/session
+  endpoint therefore carries it: in the body for
+  `POST /api/chat|auth/register|auth/login|auth/anonymous`, and as a
+  required query parameter for the GET/DELETE/PUT session endpoints,
+  `POST /api/auth/logout` and the admin refund endpoints. A missing
+  `tenant_id` is a `422`.
+- A tenant whose commerce provider is not Firestore (a Shopify-backed
+  tenant) has no Firestore database of its own, but its support accounts and
+  chat transcripts are still this product's data — such a tenant names one
+  explicitly via `account_database_id` on its `tenants/` document. Missing
+  that, requests fail `503`; there is no shared fallback.
 - Anything that creates a session must supply it: the frontend
-  (`VITE_TENANT_ID`), the smoke tests, `tests/eval_vertex.py`, and both eval
-  dataset generators. Recorded eval datasets carry it in
-  `session_input.state`.
+  (`VITE_TENANT_ID`, threaded through `currentTenantId()` in
+  `frontend/src/services/api.ts` to chat, auth and session calls alike), the
+  smoke tests, `tests/eval_vertex.py`, and both eval dataset generators.
+  Recorded eval datasets carry it in `session_input.state`.
+- Resuming a session cross-tenant is refused. `agent_client` writes
+  `tenant_id` into ADK session state only at creation and never re-passes it
+  (see `backend/app/agent_client.py`), so a resumed conversation keeps
+  running under the tenant it was created with — `/api/chat` compares the
+  stored session's tenant against the request's and returns `404` (not
+  `403`, which would confirm the session exists elsewhere) on a mismatch.
 
 Full design: `docs/superpowers/specs/2026-08-02-multi-tenant-provider-architecture-design.md`.
 

@@ -119,6 +119,20 @@ async function withRetry<T>(
   throw new Error(getErrorMessage(lastError!));
 }
 
+// Which merchant/tenant this widget instance is serving.
+//
+// Every backend endpoint that touches accounts, sessions or commerce data
+// requires it — accounts and sessions are stored in the tenant's OWN
+// Firestore database, so the backend cannot resolve, authenticate or even
+// find anything without it (see backend/app/database.py's module docstring).
+// There is no embed-script mechanism in this repo yet for a widget to expose
+// its own store identifier, so this falls back to a build-time env var as a
+// placeholder for that (out of scope for this plan — see backend
+// ChatRequest.tenant_id's docstring).
+export function currentTenantId(tenantId?: string): string {
+  return tenantId || import.meta.env.VITE_TENANT_ID;
+}
+
 // Helper to get auth headers
 function getAuthHeaders(): Record<string, string> {
   const user = localStorage.getItem('user');
@@ -155,15 +169,12 @@ export const chatService = {
       session_id: sessionId
     });
 
-    // tenant_id: which merchant/tenant this chat belongs to. There's no
-    // embed-script mechanism in this repo yet for a widget to expose its
-    // own store identifier, so this falls back to a build-time env var as
-    // a placeholder for that (out of scope for this plan — see backend
-    // ChatRequest.tenant_id's docstring).
+    // tenant_id: which merchant/tenant this chat belongs to — see
+    // currentTenantId() above.
     const requestData: ChatRequest = {
       message,
       session_id: sessionId,
-      tenant_id: tenantId || import.meta.env.VITE_TENANT_ID,
+      tenant_id: currentTenantId(tenantId),
     };
 
     // Chat requests don't retry on server errors (to avoid duplicate messages)
@@ -236,11 +247,7 @@ export interface RefundApprovalActionResponse {
 // Every refund-approval call is tenant-scoped: staged refund requests live
 // in the requesting tenant's own Firestore database, so the backend needs to
 // know which tenant's queue is being addressed before it can find anything.
-// Same placeholder source as chatService.sendMessage's tenant_id — a real
-// embed-script mechanism would supply it per-widget.
-function currentTenantId(tenantId?: string): string {
-  return tenantId || import.meta.env.VITE_TENANT_ID;
-}
+// currentTenantId() is defined at the top of this module.
 
 export const refundApprovalService = {
   async getPending(tenantId?: string): Promise<RefundApprovalsPendingResponse> {
@@ -273,39 +280,48 @@ export const refundApprovalService = {
   },
 };
 
+// Sessions are stored in their tenant's own Firestore database and the auth
+// token is verified against that same database, so tenant_id is a REQUIRED
+// query parameter on every call below — omitting it is a 422, not a default.
 export const sessionService = {
-  async listSessions(): Promise<SessionListResponse> {
+  async listSessions(tenantId?: string): Promise<SessionListResponse> {
     const headers = getAuthHeaders();
     const response = await withRetry(
-      () => apiClient.get<SessionListResponse>('/api/sessions', { headers })
+      () => apiClient.get<SessionListResponse>('/api/sessions', {
+        headers,
+        params: { tenant_id: currentTenantId(tenantId) },
+      })
     );
     return response.data;
   },
 
-  async renameSession(sessionId: string, newName: string): Promise<void> {
+  async renameSession(sessionId: string, newName: string, tenantId?: string): Promise<void> {
     const headers = getAuthHeaders();
     await withRetry(
       () => apiClient.put(
         `/api/sessions/${sessionId}/rename`,
         { session_name: newName },
-        { headers }
+        { headers, params: { tenant_id: currentTenantId(tenantId) } }
       )
     );
   },
 
-  async deleteSession(sessionId: string): Promise<void> {
+  async deleteSession(sessionId: string, tenantId?: string): Promise<void> {
     const headers = getAuthHeaders();
     await withRetry(
-      () => apiClient.delete(`/api/sessions/${sessionId}`, { headers })
+      () => apiClient.delete(`/api/sessions/${sessionId}`, {
+        headers,
+        params: { tenant_id: currentTenantId(tenantId) },
+      })
     );
   },
 
-  async getSessionMessages(sessionId: string): Promise<MessageHistoryResponse> {
+  async getSessionMessages(sessionId: string, tenantId?: string): Promise<MessageHistoryResponse> {
     const headers = getAuthHeaders();
     const response = await withRetry(
       () => apiClient.get<MessageHistoryResponse>(
         `/api/sessions/${sessionId}/messages`,
-        { headers }
+        { headers, params: { tenant_id: currentTenantId(tenantId) } }
       )
     );
     return response.data;

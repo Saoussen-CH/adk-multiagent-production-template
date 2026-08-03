@@ -43,6 +43,15 @@ class TenantConfig:
     pool_id: Optional[str] = None
     project_id: Optional[str] = None
     refund_policy_ref: Optional[str] = None
+    # Which Firestore database holds this tenant's *backend account* data
+    # (users / sessions / tokens / messages). Normally unset: a
+    # firestore-backed tenant keeps its accounts in the same database as its
+    # commerce data, so `account_database()` below derives it from
+    # provider_config. It only has to be set explicitly for a tenant whose
+    # commerce provider is not Firestore (a Shopify-backed tenant has no
+    # Firestore database of its own, but accounts and chat sessions are this
+    # product's data, not the merchant's, and still need somewhere to live).
+    account_database_id: Optional[str] = None
 
 
 _tenant_config_cache: dict[str, TenantConfig] = {}
@@ -54,9 +63,14 @@ _tenant_config_cache: dict[str, TenantConfig] = {}
 _datastore_owner: dict[tuple[str, str], str] = {}
 
 
+def _scope(config: TenantConfig) -> str:
+    # project_id for a (future) heavy-tier tenant, pool_id for light tier.
+    return config.project_id or config.pool_id or "<unscoped>"
+
+
 def isolation_key(config: TenantConfig) -> Optional[tuple[str, str]]:
-    """The (scope, datastore) pair a tenant's data physically lives in, or
-    None for a provider whose store isn't ours to keep unique (a
+    """The (scope, datastore) pair a tenant's *commerce* data physically
+    lives in, or None for a provider whose store isn't ours to keep unique (a
     Shopify-backed tenant's data lives in that merchant's own Shopify shop,
     which is inherently theirs alone)."""
     if config.provider_type != "firestore":
@@ -64,9 +78,54 @@ def isolation_key(config: TenantConfig) -> Optional[tuple[str, str]]:
     database_id = config.provider_config.get("database_id")
     if not database_id:
         return None
-    # project_id for a (future) heavy-tier tenant, pool_id for light tier.
-    scope = config.project_id or config.pool_id or "<unscoped>"
-    return (scope, database_id)
+    return (_scope(config), database_id)
+
+
+def account_database(config: TenantConfig) -> Optional[str]:
+    """The Firestore database holding this tenant's backend accounts —
+    `users`, `sessions`, `tokens` and each session's `messages`.
+
+    A customer of Merchant A and a customer of Merchant B who sign up with
+    the same email address are different accounts under different merchants,
+    so the account layer needs the same physical per-tenant separation the
+    commerce layer already has (docs/ARCHITECTURE.md, "Multi-tenancy"). That
+    falls out of putting the accounts in the tenant's *own* database rather
+    than a shared one, which is what this returns.
+
+    Returns None when the tenant config names no such database — an explicit
+    misconfiguration for the caller to reject, never a silent fallback to a
+    shared default.
+    """
+    if config.account_database_id:
+        return config.account_database_id
+    if config.provider_type == "firestore":
+        return config.provider_config.get("database_id")
+    return None
+
+
+def account_isolation_key(config: TenantConfig) -> Optional[tuple[str, str]]:
+    """`isolation_key` for the account store. Identical to it for a
+    firestore-backed tenant (same database); distinct only when
+    `account_database_id` is set explicitly."""
+    database_id = account_database(config)
+    if not database_id:
+        return None
+    return (_scope(config), database_id)
+
+
+def isolation_keys(config: TenantConfig) -> list[tuple[str, str]]:
+    """Every (scope, datastore) pair this tenant claims exclusive use of.
+
+    Both the commerce store and the account store are covered: two tenants
+    pointing their account stores at one database would collide their user
+    accounts exactly as two tenants sharing a commerce database collide their
+    orders.
+    """
+    keys: list[tuple[str, str]] = []
+    for key in (isolation_key(config), account_isolation_key(config)):
+        if key is not None and key not in keys:
+            keys.append(key)
+    return keys
 
 
 def assert_unique_datastores(configs) -> None:
@@ -80,17 +139,15 @@ def assert_unique_datastores(configs) -> None:
     """
     owners: dict[tuple[str, str], str] = {}
     for config in configs:
-        key = isolation_key(config)
-        if key is None:
-            continue
-        existing = owners.get(key)
-        if existing is not None and existing != config.tenant_id:
-            raise TenantConfigConflictError(
-                f"Tenants {existing!r} and {config.tenant_id!r} both resolve to database "
-                f"{key[1]!r} in scope {key[0]!r} — light-tier isolation is per-database, "
-                "so two tenants sharing one database have no isolation at all"
-            )
-        owners[key] = config.tenant_id
+        for key in isolation_keys(config):
+            existing = owners.get(key)
+            if existing is not None and existing != config.tenant_id:
+                raise TenantConfigConflictError(
+                    f"Tenants {existing!r} and {config.tenant_id!r} both resolve to database "
+                    f"{key[1]!r} in scope {key[0]!r} — light-tier isolation is per-database, "
+                    "so two tenants sharing one database have no isolation at all"
+                )
+            owners[key] = config.tenant_id
 
 
 def load_tenant_config(tenant_id: str) -> TenantConfig:
@@ -119,6 +176,7 @@ def load_tenant_config(tenant_id: str) -> TenantConfig:
         pool_id=data.get("pool_id"),
         project_id=data.get("project_id"),
         refund_policy_ref=data.get("refund_policy_ref"),
+        account_database_id=data.get("account_database_id"),
     )
     # Uniqueness is checked against every tenant resolved so far in this
     # process. That is necessarily partial (it can't see a tenant nobody has
@@ -131,8 +189,8 @@ def load_tenant_config(tenant_id: str) -> TenantConfig:
     # re-using its database_id for a different tenant within the life of one
     # process is (correctly) refused until invalidate_tenant_config_cache()
     # is called. Tenant offboarding is an operator action, not a hot path.
-    key = isolation_key(config)
-    if key is not None:
+    keys = isolation_keys(config)
+    for key in keys:
         owner = _datastore_owner.get(key)
         if owner is not None and owner != tenant_id:
             logger.error(
@@ -146,6 +204,7 @@ def load_tenant_config(tenant_id: str) -> TenantConfig:
                 f"Tenants {owner!r} and {tenant_id!r} both resolve to database {key[1]!r} "
                 f"in scope {key[0]!r} — refusing to serve a configuration with no isolation"
             )
+    for key in keys:
         _datastore_owner[key] = tenant_id
 
     _tenant_config_cache[tenant_id] = config
@@ -165,6 +224,6 @@ def invalidate_tenant_config_cache(tenant_id: Optional[str] = None) -> None:
     else:
         config = _tenant_config_cache.pop(tenant_id, None)
         if config is not None:
-            key = isolation_key(config)
-            if key is not None and _datastore_owner.get(key) == tenant_id:
-                del _datastore_owner[key]
+            for key in isolation_keys(config):
+                if _datastore_owner.get(key) == tenant_id:
+                    del _datastore_owner[key]

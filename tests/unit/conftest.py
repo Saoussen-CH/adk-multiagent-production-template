@@ -247,6 +247,41 @@ def _seed_default_test_tenant(mock_db):
 
 
 @pytest.fixture
+def tenant_databases(mock_db):
+    """Map of Firestore database name -> MockFirestoreClient.
+
+    Backs `wire_backend_account_stores` below. Starts with the one database
+    `_seed_default_test_tenant` points "test-tenant" at; multi-tenant tests
+    add their own entries before exercising an endpoint.
+    """
+    return {"test-tenant-db": mock_db}
+
+
+@pytest.fixture
+def wire_backend_account_stores(monkeypatch, tenant_databases):
+    """Point `backend/app/database.py`'s per-tenant account stores at mocks.
+
+    The backend's users/sessions/tokens/messages now live in each tenant's
+    OWN Firestore database, resolved through
+    `get_tenant_database(tenant_id)` -> `load_tenant_config` ->
+    `get_db_client(database_id)`. Patching that last hop by *name* (rather
+    than the blanket `return_value=mock_db` the `mock_backends` fixture uses
+    for the commerce layer) is what lets a test give two tenants genuinely
+    separate account stores — without it, both tenants would share one mock
+    and every cross-tenant isolation assertion would pass vacuously.
+
+    Not autouse: only the handful of modules that import `backend.app` need
+    it, and the pure tool tests should not pay to import FastAPI.
+    """
+    from backend.app import database as backend_database
+
+    backend_database.reset_tenant_database_cache()
+    monkeypatch.setattr(backend_database, "get_db_client", lambda database_id: tenant_databases[database_id])
+    yield tenant_databases
+    backend_database.reset_tenant_database_cache()
+
+
+@pytest.fixture
 def mock_tool_context():
     """A mock ToolContext for demo-user-001, who owns ORD-12345, ORD-67890
     and ORD-11111 in the seed data.

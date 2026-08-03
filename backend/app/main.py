@@ -19,11 +19,12 @@ from customer_support_mas.tenancy.config import (
 from . import auth, refund_approvals
 from .agent_client import agent_client
 from .config import settings
-from .database import get_database
+from .database import Database, TenantAccountStoreError, get_database, get_tenant_database
 from .health import HealthChecker, HealthStatus, liveness_check, readiness_check
 from .logging_config import get_logger, logging_middleware, set_request_context, setup_logging
 from .metrics import increment_chat_errors, increment_chat_requests, metrics, metrics_middleware
 from .models import (
+    AnonymousUserRequest,
     AnonymousUserResponse,
     AuthResponse,
     ChatRequest,
@@ -64,11 +65,19 @@ if _MODEL_ARMOR_ENABLED and _MODEL_ARMOR_TEMPLATE_ID:
     except Exception as _ma_init_err:
         logging.getLogger(__name__).warning("Model Armor init failed: %s", _ma_init_err)
 
-# Initialize database
-db = get_database(project_id=settings.google_cloud_project, database_id="customer-support-db")
+# Control-plane database handle. This is NOT where accounts or sessions live
+# any more — those are per-tenant, resolved per request via
+# resolve_tenant_database(). This handle exists for the `tenants` collection's
+# own database and to give the health check something to ping; it is
+# deliberately not tenant-scoped (tenant_id=None) and must never be used to
+# read or write user/session/token/message data.
+control_plane_db = get_database(
+    project_id=settings.google_cloud_project,
+    database_id=os.getenv("FIRESTORE_DATABASE", "customer-support-db"),
+)
 
 # Initialize health checker (agent_client added after import)
-health_checker = HealthChecker(db=db, agent_client=None)
+health_checker = HealthChecker(db=control_plane_db, agent_client=None)
 
 app = FastAPI(
     title="Customer Support AI Backend",
@@ -142,16 +151,65 @@ async def shutdown_event():
 
 
 # =============================================================================
-# AUTHENTICATION DEPENDENCY
+# TENANT RESOLUTION + AUTHENTICATION DEPENDENCY
+#
+# Ordering constraint (the load-bearing bit of this module's tenancy design):
+# auth tokens live in their tenant's own Firestore database, so `tenant_id`
+# has to be known BEFORE a bearer token can be verified. That is why:
+#   - every GET/DELETE endpoint takes `tenant_id` as a *required query
+#     parameter*, which `get_current_user` declares too, so FastAPI has it in
+#     hand while solving the dependency;
+#   - `/api/chat`, whose tenant_id arrives in the request body, does NOT use
+#     the dependency. A FastAPI dependency cannot read a body model that the
+#     path operation also declares (two body params of the same name make
+#     FastAPI switch to an embedded body and change the wire format), so chat
+#     resolves the tenant and then authenticates inline, in that order.
 # =============================================================================
 
 
-def get_current_user(authorization: Optional[str] = Header(None)) -> Optional[str]:
-    """
-    Extract user_id from Authorization header.
+def resolve_tenant_database(tenant_id: str) -> Database:
+    """Resolve `tenant_id` to its own account store, or raise a clean HTTP error.
 
-    Returns:
-        user_id if authenticated, None if anonymous
+    Every tenant-facing entry point funnels through here so that the mapping
+    from tenancy errors to status codes exists in exactly one place:
+      - unknown tenant        -> 404 (names the id; it came from the caller)
+      - two tenants, one db   -> 503 (generic: the real message names both
+                                tenants and the shared database)
+      - no account db config  -> 503 (generic: same reason)
+
+    `load_tenant_config` is called explicitly first, before
+    `get_tenant_database` (which calls it again, from its in-process cache).
+    The duplicate is intentional and free: it keeps validation of the
+    caller-supplied tenant_id visibly ahead of everything else in the request
+    path, which is the property tests/unit/test_chat_tenant_validation.py
+    pins down.
+    """
+    try:
+        load_tenant_config(tenant_id)
+    except TenantNotFoundError:
+        logger.warning("Request for unknown tenant", tenant_id=tenant_id)
+        raise HTTPException(status_code=404, detail=f"Unknown tenant_id: {tenant_id}")
+    except TenantConfigConflictError as exc:
+        # A misconfiguration, not a client error — and its message names
+        # BOTH colliding tenant ids and the shared database name, so it must
+        # never reach the caller. Log it server-side, return a generic 503.
+        logger.error("Tenant config conflict", tenant_id=tenant_id, error=str(exc))
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable for this tenant")
+
+    try:
+        return get_tenant_database(tenant_id)
+    except TenantAccountStoreError as exc:
+        logger.error("Tenant has no account store configured", tenant_id=tenant_id, error=str(exc))
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable for this tenant")
+
+
+def authenticate_bearer(tenant_db: Database, authorization: Optional[str]) -> Optional[str]:
+    """Verify an Authorization header against ONE tenant's token store.
+
+    Returns None when no header was supplied (the caller may still be an
+    anonymous X-User-Id user). Raises 401 for a malformed header or a token
+    that this tenant's database does not know — including a token that is
+    perfectly valid for a *different* tenant, which is the point.
     """
     if not authorization:
         return None
@@ -161,8 +219,7 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> Optional[st
     if len(parts) != 2 or parts[0].lower() != "bearer":
         raise HTTPException(status_code=401, detail="Invalid authorization header")
 
-    token = parts[1]
-    user_id = db.verify_token(token)
+    user_id = tenant_db.verify_token(parts[1])
 
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -170,7 +227,25 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> Optional[st
     return user_id
 
 
-def require_approver(user_id: Optional[str] = Depends(get_current_user)) -> str:
+def get_current_user(tenant_id: str, authorization: Optional[str] = Header(None)) -> Optional[str]:
+    """
+    Extract user_id from the Authorization header, within a tenant.
+
+    `tenant_id` is a required query parameter on every endpoint using this
+    dependency — a token can only be verified against the database of the
+    tenant it was issued for.
+
+    Returns:
+        user_id if authenticated, None if anonymous
+    """
+    if not authorization:
+        # Nothing to verify — don't pay for tenant resolution to say so.
+        return None
+
+    return authenticate_bearer(resolve_tenant_database(tenant_id), authorization)
+
+
+def require_approver(tenant_id: str, user_id: Optional[str] = Depends(get_current_user)) -> str:
     """Dependency gating the refund-approval endpoints to approver-role users.
 
     401 if unauthenticated (get_current_user returned None because no/invalid
@@ -180,10 +255,13 @@ def require_approver(user_id: Optional[str] = Depends(get_current_user)) -> str:
     403 if authenticated but the user's Firestore doc has no role or a role
     other than "approver". No pending-request data is returned in either
     error case.
+
+    The role lookup reads the *tenant's own* users collection, so an
+    approver of one merchant is not even visible while serving another.
     """
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
-    user = db.get_user(user_id)
+    user = resolve_tenant_database(tenant_id).get_user(user_id)
     if not user or user.get("role") != "approver":
         raise HTTPException(status_code=403, detail="Approver role required")
     return user_id
@@ -278,17 +356,24 @@ async def get_prometheus_metrics():
 
 @app.post("/api/auth/register", response_model=AuthResponse)
 async def register(request: RegisterRequest, _rate_check: bool = Depends(RateLimitDependency("auth"))):
-    """Register a new user account."""
+    """Register a new user account with one merchant.
+
+    The account is created in that merchant's own Firestore database, so the
+    same email registering with a second merchant creates a second,
+    independent account rather than colliding with the first.
+    """
     try:
+        tenant_db = resolve_tenant_database(request.tenant_id)
+
         # Hash password and create user
         # Note: create_user() handles demo email validation and duplicate check
         password_hash = auth.hash_password(request.password)
-        user_id = db.create_user(email=request.email, name=request.name, password_hash=password_hash)
+        user_id = tenant_db.create_user(email=request.email, name=request.name, password_hash=password_hash)
 
         # Generate auth token
-        token = db.create_token(user_id)
+        token = tenant_db.create_token(user_id)
 
-        logger.info("User registered", user_id=user_id, email=request.email)
+        logger.info("User registered", user_id=user_id, email=request.email, tenant_id=request.tenant_id)
 
         return AuthResponse(user_id=user_id, token=token, name=request.name, email=request.email)
 
@@ -305,10 +390,18 @@ async def register(request: RegisterRequest, _rate_check: bool = Depends(RateLim
 
 @app.post("/api/auth/login", response_model=AuthResponse)
 async def login(request: LoginRequest, _rate_check: bool = Depends(RateLimitDependency("auth"))):
-    """Login with email and password."""
+    """Login with email and password, against one merchant's accounts.
+
+    Credentials that are valid for another merchant do not authenticate here
+    — that account simply does not exist in this tenant's database, and the
+    response is the same generic "Invalid email or password" as for any
+    unknown user (never a hint that the email exists elsewhere).
+    """
     try:
+        tenant_db = resolve_tenant_database(request.tenant_id)
+
         # Get user by email
-        user = db.get_user_by_email(request.email)
+        user = tenant_db.get_user_by_email(request.email)
         if not user:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -317,12 +410,12 @@ async def login(request: LoginRequest, _rate_check: bool = Depends(RateLimitDepe
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         # Update last login
-        db.update_last_login(user["user_id"])
+        tenant_db.update_last_login(user["user_id"])
 
         # Generate auth token
-        token = db.create_token(user["user_id"])
+        token = tenant_db.create_token(user["user_id"])
 
-        logger.info("User logged in", user_id=user["user_id"], email=request.email)
+        logger.info("User logged in", user_id=user["user_id"], email=request.email, tenant_id=request.tenant_id)
 
         return AuthResponse(user_id=user["user_id"], token=token, name=user["name"], email=user["email"])
 
@@ -334,27 +427,46 @@ async def login(request: LoginRequest, _rate_check: bool = Depends(RateLimitDepe
 
 
 @app.post("/api/auth/anonymous", response_model=AnonymousUserResponse)
-async def create_anonymous(_rate_check: bool = Depends(RateLimitDependency("auth"))):
-    """Create an anonymous user (for users who don't want to register)."""
+async def create_anonymous(
+    request: AnonymousUserRequest,
+    _rate_check: bool = Depends(RateLimitDependency("auth")),
+):
+    """Create an anonymous user under one merchant.
+
+    Takes a body now (it used to take none): the anonymous user document is
+    written to the tenant's own database, so the tenant has to be named.
+    """
     try:
-        user_id = db.create_anonymous_user()
+        tenant_db = resolve_tenant_database(request.tenant_id)
+        user_id = tenant_db.create_anonymous_user()
 
         return AnonymousUserResponse(user_id=user_id, is_anonymous=True)
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Anonymous user creation error", error=str(e))
+        logger.error("Anonymous user creation error", error=str(e), tenant_id=request.tenant_id)
         raise HTTPException(status_code=500, detail="Failed to create anonymous user")
 
 
 @app.post("/api/auth/logout")
-async def logout(authorization: str = Header(...)):
-    """Logout (revoke token)."""
+async def logout(tenant_id: str, authorization: str = Header(...)):
+    """Logout (revoke token).
+
+    `tenant_id` is a required query parameter: the token document lives in
+    that tenant's own database, so there is nowhere else to delete it from.
+    A token issued by another tenant is not reachable here and revoking it
+    is a no-op — deliberately reported as success, so this endpoint cannot
+    be used to probe which tenant a token belongs to.
+    """
     try:
+        tenant_db = resolve_tenant_database(tenant_id)
+
         # Extract token
         parts = authorization.split()
         if len(parts) == 2 and parts[0].lower() == "bearer":
             token = parts[1]
-            db.revoke_token(token)
+            tenant_db.revoke_token(token)
             return {"status": "logged_out"}
 
         raise HTTPException(status_code=400, detail="Invalid authorization header")
@@ -374,7 +486,7 @@ async def logout(authorization: str = Header(...)):
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
-    user_id: Optional[str] = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
     _rate_check: bool = Depends(RateLimitDependency("chat")),
 ):
@@ -385,24 +497,23 @@ async def chat(
     - Authenticated users (via Authorization: Bearer token header)
     - Anonymous users (via X-User-Id header with anon-* user_id)
 
+    Unlike every other authenticated endpoint here, this one does NOT use the
+    `get_current_user` dependency: its `tenant_id` arrives in the request
+    body, and a FastAPI dependency cannot read a body model that the path
+    operation also declares without changing the wire format (two body params
+    make FastAPI embed the body). Tokens are stored per tenant, so the tenant
+    must be resolved before the token can be verified — hence the explicit,
+    ordered resolve-then-authenticate below.
+
     Args:
         request: ChatRequest with message, optional session_id, and required tenant_id
-        user_id: Extracted from Authorization header (if authenticated)
+        authorization: Bearer token header (if authenticated)
         x_user_id: Extracted from X-User-Id header (if anonymous)
 
     Returns:
         ChatResponse with agent response, user_id, and session_id
     """
     try:
-        # Determine user_id (auth takes precedence over anonymous)
-        actual_user_id = user_id or x_user_id
-
-        if not actual_user_id:
-            raise HTTPException(
-                status_code=401,
-                detail="Authentication required. Use Authorization header or X-User-Id for anonymous users.",
-            )
-
         # Resolve the tenant BEFORE anything else touches request.tenant_id.
         # It is a caller-supplied string: without this check an unknown value
         # would (a) be accepted as a rate-limit bucket key, letting any client
@@ -412,22 +523,21 @@ async def chat(
         # TenantNotFoundError is swallowed by @tool_error_handler into a
         # vague chat reply instead of a clean 404. load_tenant_config is
         # in-process cached, so on the hot path this is a dict lookup.
-        try:
-            load_tenant_config(request.tenant_id)
-        except TenantNotFoundError:
-            logger.warning("Chat request for unknown tenant", tenant_id=request.tenant_id)
-            raise HTTPException(status_code=404, detail=f"Unknown tenant_id: {request.tenant_id}")
-        except TenantConfigConflictError as exc:
-            # A misconfiguration, not a client error — and its message names
-            # BOTH colliding tenant ids and the shared database name, so it
-            # must never reach the caller. Log it server-side, return a
-            # generic 503.
-            logger.error(
-                "Tenant config conflict on chat request",
-                tenant_id=request.tenant_id,
-                error=str(exc),
+        #
+        # It also has to come first for a second reason now: the auth token
+        # is verified against this tenant's own token store, so there is no
+        # authenticating anyone until the tenant is known.
+        tenant_db = resolve_tenant_database(request.tenant_id)
+
+        # Determine user_id (auth takes precedence over anonymous)
+        user_id = authenticate_bearer(tenant_db, authorization)
+        actual_user_id = user_id or x_user_id
+
+        if not actual_user_id:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required. Use Authorization header or X-User-Id for anonymous users.",
             )
-            raise HTTPException(status_code=503, detail="Service temporarily unavailable for this tenant")
 
         # Per-tenant rate limit — an additional ceiling on top of the
         # per-user RateLimitDependency("chat") check above, not a
@@ -447,12 +557,35 @@ async def chat(
 
         # Check if this is a new session or existing one
         if request.session_id:
-            # Verify session belongs to user
-            session = db.get_session(request.session_id)
+            # Verify session belongs to user AND to this tenant.
+            #
+            # The tenant half matters more than it looks: agent_client only
+            # writes tenant_id into the Agent Engine session's state at
+            # *creation* and never re-passes it on continuation (by design —
+            # see agent_client.query_agent's docstring). So a resumed
+            # conversation keeps running under whatever tenant it was created
+            # with, regardless of what this request claims. Without the check
+            # below, a caller could hand a session_id created under Merchant A
+            # to a request naming Merchant B and have the agent keep serving
+            # Merchant A's data under Merchant B's rate-limit budget and audit
+            # trail. `get_session` is already bound to this tenant's database,
+            # so a foreign session normally isn't found at all; the explicit
+            # comparison is the second line of defence.
+            session = tenant_db.get_session(request.session_id)
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
             if session["user_id"] != actual_user_id:
                 raise HTTPException(status_code=403, detail="Session does not belong to user")
+            session_tenant = session.get("tenant_id")
+            if session_tenant is not None and session_tenant != request.tenant_id:
+                # 404, not 403: confirming the session exists under a
+                # different tenant would itself be a cross-tenant disclosure.
+                logger.warning(
+                    "Session/tenant mismatch on chat continuation",
+                    session_id=request.session_id,
+                    claimed_tenant=request.tenant_id,
+                )
+                raise HTTPException(status_code=404, detail="Session not found")
 
             internal_session_id = request.session_id
             agent_engine_session_id = session["agent_engine_session_id"]
@@ -500,17 +633,17 @@ async def chat(
 
         # If new session, create it in database
         if not internal_session_id:
-            internal_session_id = db.create_session(
+            internal_session_id = tenant_db.create_session(
                 user_id=actual_user_id, agent_engine_session_id=agent_engine_session_id
             )
             logger.info("Created new session", session_id=internal_session_id)
         else:
             # Update existing session
-            db.update_session(internal_session_id)
+            tenant_db.update_session(internal_session_id)
 
         # Save messages to database for UI display
-        db.save_message(internal_session_id, "user", request.message)
-        db.save_message(internal_session_id, "assistant", response_text)
+        tenant_db.save_message(internal_session_id, "user", request.message)
+        tenant_db.save_message(internal_session_id, "assistant", response_text)
 
         return ChatResponse(
             response=response_text,
@@ -534,23 +667,35 @@ async def chat(
 
 # =============================================================================
 # SESSION MANAGEMENT ENDPOINTS
+#
+# All four take `tenant_id` as a REQUIRED query parameter. They have no
+# request body to carry it in, and it cannot be optional: sessions live in
+# their tenant's own database, and `get_current_user` needs it to know which
+# token store to verify the caller's bearer token against. A missing
+# tenant_id is a 422, never an implicit default.
+#
+# Cross-tenant access therefore fails twice over: the token doesn't verify
+# against the wrong tenant's store (401), and even an anonymous X-User-Id
+# caller finds no session there (404).
 # =============================================================================
 
 
 @app.get("/api/sessions", response_model=SessionListResponse)
 async def list_sessions(
+    tenant_id: str,
     user_id: Optional[str] = Depends(get_current_user),
     x_user_id: Optional[str] = Header(None),
     _rate_check: bool = Depends(RateLimitDependency("sessions")),
 ):
-    """Get all sessions for the current user."""
+    """Get the current user's sessions with one merchant."""
     try:
+        tenant_db = resolve_tenant_database(tenant_id)
         actual_user_id = user_id or x_user_id
 
         if not actual_user_id:
             raise HTTPException(status_code=401, detail="Authentication required")
 
-        sessions = db.get_user_sessions(actual_user_id)
+        sessions = tenant_db.get_user_sessions(actual_user_id)
 
         from .models import SessionInfo
 
@@ -569,25 +714,27 @@ async def list_sessions(
 async def rename_session(
     session_id: str,
     request: RenameSessionRequest,
+    tenant_id: str,
     user_id: Optional[str] = Depends(get_current_user),
     x_user_id: Optional[str] = Header(None),
     _rate_check: bool = Depends(RateLimitDependency("sessions")),
 ):
     """Rename a session."""
     try:
+        tenant_db = resolve_tenant_database(tenant_id)
         actual_user_id = user_id or x_user_id
 
         if not actual_user_id:
             raise HTTPException(status_code=401, detail="Authentication required")
 
-        # Verify session belongs to user
-        session = db.get_session(session_id)
+        # Verify session belongs to user (and, via tenant_db, to this tenant)
+        session = tenant_db.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         if session["user_id"] != actual_user_id:
             raise HTTPException(status_code=403, detail="Session does not belong to user")
 
-        db.rename_session(session_id, request.session_name)
+        tenant_db.rename_session(session_id, request.session_name)
 
         return {"status": "success", "session_id": session_id}
 
@@ -601,25 +748,27 @@ async def rename_session(
 @app.delete("/api/sessions/{session_id}")
 async def delete_session(
     session_id: str,
+    tenant_id: str,
     user_id: Optional[str] = Depends(get_current_user),
     x_user_id: Optional[str] = Header(None),
     _rate_check: bool = Depends(RateLimitDependency("sessions")),
 ):
     """Delete a session."""
     try:
+        tenant_db = resolve_tenant_database(tenant_id)
         actual_user_id = user_id or x_user_id
 
         if not actual_user_id:
             raise HTTPException(status_code=401, detail="Authentication required")
 
-        # Verify session belongs to user
-        session = db.get_session(session_id)
+        # Verify session belongs to user (and, via tenant_db, to this tenant)
+        session = tenant_db.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         if session["user_id"] != actual_user_id:
             raise HTTPException(status_code=403, detail="Session does not belong to user")
 
-        db.delete_session(session_id)
+        tenant_db.delete_session(session_id)
 
         return {"status": "deleted", "session_id": session_id}
 
@@ -633,26 +782,28 @@ async def delete_session(
 @app.get("/api/sessions/{session_id}/messages", response_model=MessageHistoryResponse)
 async def get_session_messages(
     session_id: str,
+    tenant_id: str,
     user_id: Optional[str] = Depends(get_current_user),
     x_user_id: Optional[str] = Header(None),
     _rate_check: bool = Depends(RateLimitDependency("sessions")),
 ):
     """Get message history for a session."""
     try:
+        tenant_db = resolve_tenant_database(tenant_id)
         actual_user_id = user_id or x_user_id
 
         if not actual_user_id:
             raise HTTPException(status_code=401, detail="Authentication required")
 
-        # Verify session belongs to user
-        session = db.get_session(session_id)
+        # Verify session belongs to user (and, via tenant_db, to this tenant)
+        session = tenant_db.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         if session["user_id"] != actual_user_id:
             raise HTTPException(status_code=403, detail="Session does not belong to user")
 
         # Get messages
-        messages = db.get_session_messages(session_id)
+        messages = tenant_db.get_session_messages(session_id)
 
         message_list = [MessageInfo(**msg) for msg in messages]
 
@@ -707,18 +858,20 @@ def resolve_refund_request_store(tenant_id: str):
 
 
 def require_approver_for_tenant(tenant_id: str, approver_id: str = Depends(require_approver)) -> str:
-    """`require_approver` plus a tenant check, for the tenant-scoped admin
-    endpoints.
+    """`require_approver` plus an explicit tenant check, for the
+    tenant-scoped admin endpoints.
 
-    NOTE (known gap, deliberately not papered over): user documents carry no
-    `tenant_id` today, so this can only enforce the check for users that DO
-    have one. Any approver-role user can therefore still address any
-    tenant's queue. Closing that properly needs a tenant-membership model on
-    users (or per-tenant approver roles), which is a larger auth change than
-    this fix; the check is written so that adding the field to user docs is
-    a data change rather than a code change.
+    The primary guard is now structural rather than this comparison: users
+    live in their tenant's own database, so `require_approver`'s own lookup
+    already fails (403) for an approver of a different merchant, and the
+    bearer token that named them fails earlier still (401), having been
+    issued into a different tenant's token store. This function's remaining
+    job is to enforce the `tenant_id` field on the user document itself, for
+    a store that has not been re-pointed or a document that predates the
+    split — a user doc with no `tenant_id` at all is accepted, since it can
+    only have been written by the tenant owning the database it sits in.
     """
-    user = db.get_user(approver_id) or {}
+    user = resolve_tenant_database(tenant_id).get_user(approver_id) or {}
     user_tenant = user.get("tenant_id")
     if user_tenant is not None and user_tenant != tenant_id:
         raise HTTPException(status_code=403, detail="Approver is not authorized for this tenant")
@@ -811,18 +964,20 @@ async def api_root():
         "health": "/health",
         "endpoints": {
             "auth": {
-                "register": "POST /api/auth/register",
-                "login": "POST /api/auth/login",
-                "anonymous": "POST /api/auth/anonymous",
-                "logout": "POST /api/auth/logout",
+                "register": "POST /api/auth/register (body: tenant_id)",
+                "login": "POST /api/auth/login (body: tenant_id)",
+                "anonymous": "POST /api/auth/anonymous (body: tenant_id)",
+                "logout": "POST /api/auth/logout?tenant_id=",
             },
-            "chat": "POST /api/chat",
+            "chat": "POST /api/chat (body: tenant_id)",
             "sessions": {
-                "list": "GET /api/sessions",
-                "rename": "PUT /api/sessions/{id}/rename",
-                "delete": "DELETE /api/sessions/{id}",
+                "list": "GET /api/sessions?tenant_id=",
+                "rename": "PUT /api/sessions/{id}/rename?tenant_id=",
+                "delete": "DELETE /api/sessions/{id}?tenant_id=",
+                "messages": "GET /api/sessions/{id}/messages?tenant_id=",
             },
         },
+        "tenancy": "Every endpoint above requires a tenant_id. There is no default tenant.",
     }
 
 

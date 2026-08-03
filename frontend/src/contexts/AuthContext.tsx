@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import type { User, AuthResponse, AnonymousUserResponse } from '../types';
+import { currentTenantId } from '../services/api';
 
 interface AuthContextType {
   user: User | null;
@@ -42,7 +43,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const response = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      // tenant_id: accounts are per-merchant. The same email under another
+      // merchant is a different account in a different Firestore database,
+      // so the backend cannot look this user up without knowing which.
+      body: JSON.stringify({ email, password, tenant_id: currentTenantId() }),
     });
 
     if (!response.ok) {
@@ -69,7 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const response = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name, password }),
+      body: JSON.stringify({ email, name, password, tenant_id: currentTenantId() }),
     });
 
     if (!response.ok) {
@@ -95,6 +99,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginAsAnonymous = async () => {
     const response = await fetch('/api/auth/anonymous', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenant_id: currentTenantId() }),
     });
 
     if (!response.ok) {

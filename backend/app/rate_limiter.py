@@ -117,8 +117,7 @@ class SlidingWindowRateLimiter:
             if requests_last_minute >= config.requests_per_minute:
                 retry_after = 60 - int(current_time - min(t for t in window.timestamps if t > current_time - 60))
                 logger.warning(
-                    f"Rate limit exceeded (minute): {identifier} - "
-                    f"{requests_last_minute}/{config.requests_per_minute}"
+                    f"Rate limit exceeded (minute): {identifier} - {requests_last_minute}/{config.requests_per_minute}"
                 )
                 return False, "Rate limit exceeded. Too many requests per minute.", retry_after
 
@@ -127,14 +126,14 @@ class SlidingWindowRateLimiter:
             if requests_last_hour >= config.requests_per_hour:
                 retry_after = 3600 - int(current_time - min(t for t in window.timestamps if t > current_time - 3600))
                 logger.warning(
-                    f"Rate limit exceeded (hour): {identifier} - " f"{requests_last_hour}/{config.requests_per_hour}"
+                    f"Rate limit exceeded (hour): {identifier} - {requests_last_hour}/{config.requests_per_hour}"
                 )
                 return False, "Rate limit exceeded. Too many requests per hour.", min(retry_after, 300)
 
             # Check burst limit (last 10 seconds)
             requests_last_10s = self._count_requests_in_period(window, current_time, 10)
             if requests_last_10s >= config.burst_limit:
-                logger.warning(f"Burst limit exceeded: {identifier} - " f"{requests_last_10s}/{config.burst_limit}")
+                logger.warning(f"Burst limit exceeded: {identifier} - {requests_last_10s}/{config.burst_limit}")
                 return False, "Too many requests. Please slow down.", 10
 
             # Request allowed - record it

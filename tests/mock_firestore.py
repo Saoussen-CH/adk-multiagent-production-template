@@ -39,6 +39,26 @@ class MockDocument:
     def set(self, data):
         self._collection_data[self._doc_id] = data
 
+    def update(self, fields):
+        """Merge `fields` into an existing document.
+
+        Mirrors real Firestore closely enough for the backend account layer,
+        which uses update() for last_login, session rename/soft-delete and
+        the per-turn `message_count` bump. `firestore.Increment(n)` sentinels
+        are applied rather than stored, and updating a missing document is an
+        error, as it is in Firestore.
+        """
+        existing = self._collection_data.get(self._doc_id)
+        if existing is None:
+            raise KeyError(f"Cannot update non-existent document: {self._doc_id}")
+        for key, value in fields.items():
+            # google.cloud.firestore.Increment / ArrayUnion-style sentinels
+            # carry their operand on `.value`.
+            if value.__class__.__name__ == "Increment":
+                existing[key] = (existing.get(key) or 0) + value.value
+            else:
+                existing[key] = value
+
     def delete(self):
         self._collection_data.pop(self._doc_id, None)
 
@@ -66,10 +86,22 @@ class MockDocument:
 
 
 class MockQuery:
-    """Mimics a Firestore Query (result of .where())."""
+    """Mimics a Firestore Query (result of .where() / .order_by() / .limit())."""
 
     def __init__(self, docs):
-        self._docs = docs
+        self._docs = list(docs)
+
+    def limit(self, count):
+        return MockQuery(self._docs[:count])
+
+    def order_by(self, field, direction="ASCENDING"):
+        # Sort missing values last, matching Firestore's behaviour of simply
+        # not returning documents that lack the ordered field closely enough
+        # for tests (which always populate it).
+        ordered = sorted(self._docs, key=lambda snap: (snap.to_dict().get(field) is None, snap.to_dict().get(field)))
+        if str(direction).upper().startswith("DESC"):
+            ordered.reverse()
+        return MockQuery(ordered)
 
     def stream(self):
         yield from self._docs
@@ -98,6 +130,15 @@ class MockCollection:
     def stream(self):
         for doc_id, doc_data in self._data.items():
             yield MockSnapshot(doc_id, doc_data)
+
+    def _as_query(self):
+        return MockQuery([MockSnapshot(doc_id, data) for doc_id, data in self._data.items() if data is not None])
+
+    def limit(self, count):
+        return self._as_query().limit(count)
+
+    def order_by(self, field, direction="ASCENDING"):
+        return self._as_query().order_by(field, direction)
 
     def where(self, field_or_filter=None, op=None, value=None, *, filter=None, **kwargs):
         """Support both old-style and FieldFilter-style where queries.

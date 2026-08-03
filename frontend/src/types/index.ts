@@ -16,15 +16,24 @@ export interface AuthResponse {
   email: string;
 }
 
+// tenant_id on every auth request: accounts are scoped per merchant and
+// stored in that merchant's own Firestore database, so the same email under
+// a different tenant is a different account. No default exists.
 export interface LoginRequest {
   email: string;
   password: string;
+  tenant_id: string;
 }
 
 export interface RegisterRequest {
   email: string;
   name: string;
   password: string;
+  tenant_id: string;
+}
+
+export interface AnonymousUserRequest {
+  tenant_id: string;
 }
 
 export interface AnonymousUserResponse {

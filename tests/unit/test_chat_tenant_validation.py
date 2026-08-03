@@ -61,6 +61,17 @@ def _reset_overrides():
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _wire_account_stores(wire_backend_account_stores):
+    """Point the backend's per-tenant account stores at in-memory mocks.
+
+    /api/chat writes its session and messages to the tenant's OWN database
+    now (there is no module-level `main.db` any more), so without this the
+    happy-path test would try to reach live Firestore.
+    """
+    return wire_backend_account_stores
+
+
 def _chat(tenant_id, message="hello", user_id="anon-smoke"):
     return client.post(
         "/api/chat",
@@ -125,21 +136,30 @@ def test_validation_runs_before_the_tenant_rate_limiter(monkeypatch):
     assert seen == [], f"rate limiter was consulted for an unvalidated tenant: {seen}"
 
 
-def test_known_tenant_still_reaches_the_agent(monkeypatch):
-    """The guard must not reject legitimate traffic."""
+def test_known_tenant_still_reaches_the_agent(monkeypatch, mock_db):
+    """The guard must not reject legitimate traffic.
+
+    The session and its messages are written through the real
+    `Database` bound to the tenant's own (mocked) database — no
+    `create_session`/`save_message` stubs — so this also pins down that the
+    tenant account store is reachable end to end.
+    """
 
     async def _fake_query(user_id, agent_engine_session_id, message, tenant_id):
         assert tenant_id == KNOWN_TENANT
         return "hello back", "agent-session-1", []
 
     monkeypatch.setattr(main_module.agent_client, "query_agent", _fake_query)
-    monkeypatch.setattr(main_module.db, "create_session", lambda **kw: "internal-session-1")
-    monkeypatch.setattr(main_module.db, "save_message", lambda *a, **kw: None)
 
     response = _chat(KNOWN_TENANT)
 
     assert response.status_code == 200, response.text
     assert response.json()["response"] == "hello back"
+
+    # The session landed in the TENANT's database, stamped with its tenant_id.
+    session_id = response.json()["session_id"]
+    session = mock_db.collection("sessions").document(session_id).get().to_dict()
+    assert session["tenant_id"] == KNOWN_TENANT
 
 
 def test_tenant_config_conflict_is_a_503_that_leaks_nothing(monkeypatch):

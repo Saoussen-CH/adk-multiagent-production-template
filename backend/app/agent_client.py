@@ -277,7 +277,7 @@ class AgentEngineClient:
             _circuit_breaker.record_failure()
             logger.error("Agent query timed out", timeout_seconds=timeout_seconds, user_id=user_id)
             raise TimeoutError(
-                f"Request timed out after {timeout_seconds} seconds. " "The system is busy. Please try again."
+                f"Request timed out after {timeout_seconds} seconds. The system is busy. Please try again."
             )
         except TimeoutError:
             # Re-raise TimeoutError from session creation (already counted above)

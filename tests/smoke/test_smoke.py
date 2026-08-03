@@ -128,9 +128,15 @@ def test_model_armor_rejects_injection():
 
 
 def test_sessions_endpoint():
-    """Sessions API is accessible and returns valid JSON."""
+    """Sessions API is accessible and returns valid JSON.
+
+    tenant_id is a required query parameter: sessions live in their tenant's
+    own Firestore database, and the auth token is verified against that same
+    database, so there is nothing to resolve without it.
+    """
     r = requests.get(
         f"{BASE_URL}/api/sessions",
+        params={"tenant_id": TENANT_ID},
         headers=_anon_headers("smoke-001"),
         timeout=10,
     )
