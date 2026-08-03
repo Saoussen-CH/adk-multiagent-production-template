@@ -90,9 +90,9 @@ def test_product_search_tool():
     )
     assert r.status_code == 200
     text = r.json().get("response", "").lower()
-    assert any(
-        w in text for w in ["laptop", "found", "product", "result"]
-    ), f"Expected product results, got: {text[:200]}"
+    assert any(w in text for w in ["laptop", "found", "product", "result"]), (
+        f"Expected product results, got: {text[:200]}"
+    )
 
 
 def test_order_tracking_tool():
@@ -105,9 +105,9 @@ def test_order_tracking_tool():
     )
     assert r.status_code == 200
     text = r.json().get("response", "").lower()
-    assert any(
-        w in text for w in ["order", "status", "shipped", "processing", "delivered"]
-    ), f"Expected order info, got: {text[:200]}"
+    assert any(w in text for w in ["order", "status", "shipped", "processing", "delivered"]), (
+        f"Expected order info, got: {text[:200]}"
+    )
 
 
 def test_model_armor_rejects_injection():

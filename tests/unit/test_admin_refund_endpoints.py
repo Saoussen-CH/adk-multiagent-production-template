@@ -63,12 +63,26 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.app import main as main_module  # noqa: E402
 from backend.app.main import app, get_current_user, require_approver  # noqa: E402
-from tests.mock_firestore import MockFirestoreClient  # noqa: E402
 
 client = TestClient(app)
 
+# The tenant tests/unit/conftest.py's autouse `_seed_default_test_tenant`
+# seeds, pointing at database_id "test-tenant-db". Every admin endpoint is
+# tenant-scoped now (see the C4 note on the `mock_db` fixture below), so
+# every request below must name it.
+TENANT_ID = "test-tenant"
+PENDING_URL = f"/api/admin/refunds/pending?tenant_id={TENANT_ID}"
 
-def _stage_pending(db, order_id="ORD-12345", user_id="demo-user-001"):
+
+def _approve_url(request_id: str, tenant_id: str = TENANT_ID) -> str:
+    return f"/api/admin/refunds/{request_id}/approve?tenant_id={tenant_id}"
+
+
+def _reject_url(request_id: str, tenant_id: str = TENANT_ID) -> str:
+    return f"/api/admin/refunds/{request_id}/reject?tenant_id={tenant_id}"
+
+
+def _stage_pending(db, order_id="ORD-12345", user_id="demo-user-001", tenant_id=TENANT_ID):
     """Write a PENDING_APPROVAL refund_requests doc directly into the mock,
     mirroring what Task 8's process_refund stages. Returns the request_id.
 
@@ -80,7 +94,7 @@ def _stage_pending(db, order_id="ORD-12345", user_id="demo-user-001"):
     request_id = f"REFREQ-{order_id}"
     db.collection("refund_requests").document(request_id).set(
         {
-            "tenant_id": "test-tenant",
+            "tenant_id": tenant_id,
             "order_id": order_id,
             "user_id": user_id,
             "items": [{"item_id": "ITEM-1", "product_id": "ITEM-1", "price": 49.99}],
@@ -102,12 +116,31 @@ def _reset_overrides():
     app.dependency_overrides.clear()
 
 
-@pytest.fixture
-def mock_db(monkeypatch):
-    """Swap main.db.db (the raw Firestore client) for an isolated in-memory mock."""
-    fake = MockFirestoreClient()
-    monkeypatch.setattr(main_module.db, "db", fake)
-    return fake
+@pytest.fixture(autouse=True)
+def _wire_backend_db_to_mock(monkeypatch, mock_db):
+    """Point `main.db.db` at the shared in-memory mock.
+
+    There is deliberately no local `mock_db` fixture here any more — tests in
+    this module use tests/unit/conftest.py's, because that is the client the
+    admin endpoints genuinely reach now.
+
+    C4: the endpoints used to read `main.db.db`, a single client hardcoded to
+    `database_id="customer-support-db"`, while `process_refund` stages into
+    `get_provider(tenant_id)._db` — the *tenant's own* database. The two
+    coincided only for a tenant configured with that same database_id, so
+    every other tenant's approval queue was silently empty and approving
+    raised "not found". The endpoints now resolve the store per request via
+    `resolve_refund_request_store(tenant_id)`, and conftest's autouse
+    `mock_backends` already points `firestore_provider.get_db_client` and
+    `tenancy.config.get_db_client` at `mock_db` (with
+    `_seed_default_test_tenant` seeding "test-tenant" there) — so these tests
+    now exercise the real resolution path instead of bypassing it.
+
+    `main.db.db` is still redirected here as a belt-and-braces guard against
+    any other code path reaching live Firestore during these tests.
+    """
+    monkeypatch.setattr(main_module.db, "db", mock_db)
+    return mock_db
 
 
 def _authenticate_as(user_id: str):
@@ -122,17 +155,17 @@ def _authenticate_as(user_id: str):
 def test_pending_requires_auth_401():
     """No Authorization header at all → get_current_user returns None →
     require_approver must raise 401, not 403."""
-    response = client.get("/api/admin/refunds/pending")
+    response = client.get(PENDING_URL)
     assert response.status_code == 401
 
 
 def test_approve_requires_auth_401():
-    response = client.post("/api/admin/refunds/REFREQ-whatever/approve")
+    response = client.post(_approve_url("REFREQ-whatever"))
     assert response.status_code == 401
 
 
 def test_reject_requires_auth_401():
-    response = client.post("/api/admin/refunds/REFREQ-whatever/reject", json={"note": "x"})
+    response = client.post(_reject_url("REFREQ-whatever"), json={"note": "x"})
     assert response.status_code == 401
 
 
@@ -163,7 +196,7 @@ def test_pending_requires_approver_role_403(monkeypatch, mock_db):
     _authenticate_as("demo-user-001")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"user_id": uid, "role": "customer"})
 
-    response = client.get("/api/admin/refunds/pending")
+    response = client.get(PENDING_URL)
 
     assert response.status_code == 403
     # No leakage of pending-request data in the 403 body.
@@ -175,7 +208,7 @@ def test_pending_403_when_user_has_no_role_field(monkeypatch, mock_db):
     _authenticate_as("demo-user-001")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"user_id": uid})  # no "role" key
 
-    response = client.get("/api/admin/refunds/pending")
+    response = client.get(PENDING_URL)
 
     assert response.status_code == 403
 
@@ -184,7 +217,7 @@ def test_pending_403_when_user_doc_missing(monkeypatch, mock_db):
     _authenticate_as("ghost-user")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: None)
 
-    response = client.get("/api/admin/refunds/pending")
+    response = client.get(PENDING_URL)
 
     assert response.status_code == 403
 
@@ -194,7 +227,7 @@ def test_approve_requires_approver_role_403(monkeypatch, mock_db):
     _authenticate_as("demo-user-001")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "customer"})
 
-    response = client.post(f"/api/admin/refunds/{rid}/approve")
+    response = client.post(_approve_url(rid))
 
     assert response.status_code == 403
     # Refund must not have been executed.
@@ -211,7 +244,7 @@ def test_pending_returns_staged_requests(monkeypatch, mock_db):
     _authenticate_as("approver-1")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
 
-    response = client.get("/api/admin/refunds/pending")
+    response = client.get(PENDING_URL)
 
     assert response.status_code == 200
     body = response.json()
@@ -224,7 +257,7 @@ def test_approve_happy_path_200(monkeypatch, mock_db):
     _authenticate_as("approver-1")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
 
-    response = client.post(f"/api/admin/refunds/{rid}/approve")
+    response = client.post(_approve_url(rid))
 
     assert response.status_code == 200
     body = response.json()
@@ -245,10 +278,10 @@ def test_approve_second_time_returns_409(monkeypatch, mock_db):
     _authenticate_as("approver-1")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
 
-    first = client.post(f"/api/admin/refunds/{rid}/approve")
+    first = client.post(_approve_url(rid))
     assert first.status_code == 200
 
-    second = client.post(f"/api/admin/refunds/{rid}/approve")
+    second = client.post(_approve_url(rid))
     assert second.status_code == 409
 
     # Still exactly one refund record — the money-safety invariant.
@@ -259,7 +292,7 @@ def test_approve_not_found_returns_404(monkeypatch, mock_db):
     _authenticate_as("approver-1")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
 
-    response = client.post("/api/admin/refunds/REFREQ-does-not-exist/approve")
+    response = client.post(_approve_url("REFREQ-does-not-exist"))
 
     assert response.status_code == 404
 
@@ -269,7 +302,7 @@ def test_approve_self_approval_returns_403(monkeypatch, mock_db):
     _authenticate_as("approver-1")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
 
-    response = client.post(f"/api/admin/refunds/{rid}/approve")
+    response = client.post(_approve_url(rid))
 
     assert response.status_code == 403
     assert list(mock_db.collection("refunds").stream()) == []
@@ -280,7 +313,7 @@ def test_reject_happy_path_200(monkeypatch, mock_db):
     _authenticate_as("approver-1")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
 
-    response = client.post(f"/api/admin/refunds/{rid}/reject", json={"note": "no evidence"})
+    response = client.post(_reject_url(rid), json={"note": "no evidence"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "rejected"
@@ -296,10 +329,10 @@ def test_reject_twice_returns_409(monkeypatch, mock_db):
     _authenticate_as("approver-1")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
 
-    first = client.post(f"/api/admin/refunds/{rid}/reject", json={})
+    first = client.post(_reject_url(rid), json={})
     assert first.status_code == 200
 
-    second = client.post(f"/api/admin/refunds/{rid}/reject", json={})
+    second = client.post(_reject_url(rid), json={})
     assert second.status_code == 409
 
 
@@ -317,12 +350,12 @@ def test_pending_unexpected_error_returns_500(monkeypatch, mock_db):
     _authenticate_as("approver-1")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
 
-    def _boom(db):
+    def _boom(db, tenant_id):
         raise RuntimeError("firestore hiccup")
 
     monkeypatch.setattr(main_module.refund_approvals, "list_pending", _boom)
 
-    response = client.get("/api/admin/refunds/pending")
+    response = client.get(PENDING_URL)
 
     assert response.status_code == 500
     assert response.json() == {"detail": "Failed to list pending refunds"}
@@ -335,12 +368,12 @@ def test_approve_unexpected_error_returns_500(monkeypatch, mock_db):
     _authenticate_as("approver-1")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
 
-    def _boom(db, request_id, approver_id):
+    def _boom(db, tenant_id, request_id, approver_id):
         raise RuntimeError("firestore hiccup")
 
     monkeypatch.setattr(main_module.refund_approvals, "approve_refund", _boom)
 
-    response = client.post(f"/api/admin/refunds/{rid}/approve")
+    response = client.post(_approve_url(rid))
 
     assert response.status_code == 500
     assert response.json() == {"detail": "Failed to approve refund"}
@@ -353,17 +386,185 @@ def test_reject_unexpected_error_returns_500(monkeypatch, mock_db):
     _authenticate_as("approver-1")
     monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
 
-    def _boom(db, request_id, approver_id, note=""):
+    def _boom(db, tenant_id, request_id, approver_id, note=""):
         raise RuntimeError("firestore hiccup")
 
     monkeypatch.setattr(main_module.refund_approvals, "reject_refund", _boom)
 
-    response = client.post(f"/api/admin/refunds/{rid}/reject", json={})
+    response = client.post(_reject_url(rid), json={})
 
     assert response.status_code == 500
     assert response.json() == {"detail": "Failed to reject refund"}
     assert "RuntimeError" not in response.text
     assert "Traceback" not in response.text
+
+
+# =============================================================================
+# C4 — the refund_requests split brain
+#
+# process_refund stages into get_provider(tenant_id)._db (the tenant's OWN
+# Firestore database); the admin API used to read a single hardcoded
+# database_id="customer-support-db" handle. For the one seeded tenant those
+# coincide, which is exactly why nothing caught it. These tests use a SECOND
+# tenant whose database_id is different, so the coincidence is gone.
+# =============================================================================
+
+
+@pytest.fixture
+def second_tenant(mock_db, mock_db_factory, monkeypatch):
+    """A second tenant in the same pool with its own, different database.
+
+    Returns that tenant's Firestore client. Its refund_requests are
+    physically elsewhere than "test-tenant"'s, so any endpoint still reading
+    a fixed database can't see them.
+    """
+    from customer_support_mas.tenancy import config as config_module
+
+    other_db = mock_db_factory("other-tenant-db")
+
+    # The control-plane database holds tenant routing config for both.
+    mock_db.collection("tenants").document("other-tenant").set(
+        {
+            "tenant_id": "other-tenant",
+            "tier": "light",
+            "provider_type": "firestore",
+            "provider_config": {"database_id": "other-tenant-db"},
+            "pool_id": "test-pool",
+            "refund_policy_ref": "other-tenant",
+        }
+    )
+    config_module.invalidate_tenant_config_cache()
+
+    monkeypatch.setattr(
+        "customer_support_mas.providers.firestore_provider.get_db_client",
+        lambda database_id: {"test-tenant-db": mock_db, "other-tenant-db": other_db}[database_id],
+    )
+    yield other_db
+    config_module.invalidate_tenant_config_cache()
+
+
+def _as_approver(monkeypatch, user_id="approver-1"):
+    _authenticate_as(user_id)
+    monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver"})
+
+
+def test_pending_requires_a_tenant_id(monkeypatch, mock_db):
+    """No default tenant: the query parameter is required, not optional."""
+    _as_approver(monkeypatch)
+
+    response = client.get("/api/admin/refunds/pending")
+
+    assert response.status_code == 422
+
+
+def test_second_tenants_staged_request_is_visible_on_its_own_queue(monkeypatch, mock_db, second_tenant):
+    """The regression: a tenant whose database_id differs from the hardcoded
+    one used to have a permanently empty approval queue."""
+    rid = _stage_pending(second_tenant, order_id="ORD-77777", user_id="shopper-b", tenant_id="other-tenant")
+    _as_approver(monkeypatch)
+
+    response = client.get("/api/admin/refunds/pending?tenant_id=other-tenant")
+
+    assert response.status_code == 200
+    assert [r["request_id"] for r in response.json()["requests"]] == [rid]
+
+
+def test_one_tenants_queue_never_shows_another_tenants_requests(monkeypatch, mock_db, second_tenant):
+    _stage_pending(mock_db)  # tenant_id="test-tenant", in test-tenant-db
+    _stage_pending(second_tenant, order_id="ORD-77777", user_id="shopper-b", tenant_id="other-tenant")
+    _as_approver(monkeypatch)
+
+    ours = client.get(PENDING_URL).json()["requests"]
+    theirs = client.get("/api/admin/refunds/pending?tenant_id=other-tenant").json()["requests"]
+
+    assert {r["request_id"] for r in ours}.isdisjoint({r["request_id"] for r in theirs})
+    assert all(r["order_id"] != "ORD-77777" for r in ours)
+
+
+def test_approving_another_tenants_request_id_is_404_not_a_cross_tenant_write(monkeypatch, mock_db, second_tenant):
+    """Knowing a request_id must not be enough to act on it from the wrong
+    tenant — and the response must not confirm the id exists elsewhere."""
+    other_rid = _stage_pending(second_tenant, order_id="ORD-77777", user_id="shopper-b", tenant_id="other-tenant")
+    _as_approver(monkeypatch)
+
+    response = client.post(_approve_url(other_rid))  # TENANT_ID, not other-tenant
+
+    assert response.status_code == 404
+    assert list(second_tenant.collection("refunds").stream()) == []
+    assert (
+        second_tenant.collection("refund_requests").document(other_rid).get().to_dict()["status"] == "PENDING_APPROVAL"
+    )
+
+
+def test_approving_through_the_owning_tenant_executes_the_refund(monkeypatch, mock_db, second_tenant):
+    other_rid = _stage_pending(second_tenant, order_id="ORD-77777", user_id="shopper-b", tenant_id="other-tenant")
+    _as_approver(monkeypatch)
+
+    response = client.post(_approve_url(other_rid, tenant_id="other-tenant"))
+
+    assert response.status_code == 200, response.text
+    # The refund landed in the SECOND tenant's database, not the default one.
+    refunds = list(second_tenant.collection("refunds").stream())
+    assert len(refunds) == 1
+    assert refunds[0].to_dict()["order_id"] == "ORD-77777"
+    assert list(mock_db.collection("refunds").stream()) == []
+
+
+def test_rejecting_another_tenants_request_id_is_404(monkeypatch, mock_db, second_tenant):
+    other_rid = _stage_pending(second_tenant, order_id="ORD-77777", user_id="shopper-b", tenant_id="other-tenant")
+    _as_approver(monkeypatch)
+
+    response = client.post(_reject_url(other_rid), json={"note": "nope"})
+
+    assert response.status_code == 404
+    assert (
+        second_tenant.collection("refund_requests").document(other_rid).get().to_dict()["status"] == "PENDING_APPROVAL"
+    )
+
+
+def test_unknown_tenant_is_404_not_an_empty_queue(monkeypatch, mock_db):
+    """An unrecognized tenant_id is a hard error, never a silent fallback."""
+    _as_approver(monkeypatch)
+
+    response = client.get("/api/admin/refunds/pending?tenant_id=no-such-tenant")
+
+    assert response.status_code == 404
+    assert "no-such-tenant" in response.json()["detail"]
+
+
+def test_provider_without_a_refund_store_is_501_not_a_500(monkeypatch, mock_db):
+    """A Shopify-backed tenant has no `_db`. That must surface as an explicit
+    'not supported', not an AttributeError-turned-500 (finding I3's
+    API-side counterpart)."""
+    from customer_support_mas.tenancy import config as config_module
+
+    mock_db.collection("tenants").document("shopify-tenant").set(
+        {
+            "tenant_id": "shopify-tenant",
+            "tier": "light",
+            "provider_type": "shopify",
+            "provider_config": {"shop_domain": "mock.myshopify.com"},
+            "pool_id": "test-pool",
+        }
+    )
+    config_module.invalidate_tenant_config_cache()
+    _as_approver(monkeypatch)
+
+    response = client.get("/api/admin/refunds/pending?tenant_id=shopify-tenant")
+
+    config_module.invalidate_tenant_config_cache()
+    assert response.status_code == 501
+
+
+def test_approver_bound_to_another_tenant_is_403(monkeypatch, mock_db):
+    """When a user doc DOES carry a tenant_id, it is enforced. (Users have no
+    such field today — see require_approver_for_tenant's note.)"""
+    _authenticate_as("approver-1")
+    monkeypatch.setattr(main_module.db, "get_user", lambda uid: {"role": "approver", "tenant_id": "other-tenant"})
+
+    response = client.get(PENDING_URL)
+
+    assert response.status_code == 403
 
 
 if __name__ == "__main__":

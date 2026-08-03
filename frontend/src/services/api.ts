@@ -233,32 +233,41 @@ export interface RefundApprovalActionResponse {
 // (any other failure). withRetry() replaces thrown errors with a generic
 // Error carrying only a friendly message, which would throw away the status
 // code this component's self-hiding behavior depends on.
+// Every refund-approval call is tenant-scoped: staged refund requests live
+// in the requesting tenant's own Firestore database, so the backend needs to
+// know which tenant's queue is being addressed before it can find anything.
+// Same placeholder source as chatService.sendMessage's tenant_id — a real
+// embed-script mechanism would supply it per-widget.
+function currentTenantId(tenantId?: string): string {
+  return tenantId || import.meta.env.VITE_TENANT_ID;
+}
+
 export const refundApprovalService = {
-  async getPending(): Promise<RefundApprovalsPendingResponse> {
+  async getPending(tenantId?: string): Promise<RefundApprovalsPendingResponse> {
     const headers = getAuthHeaders();
     const response = await apiClient.get<RefundApprovalsPendingResponse>(
       '/api/admin/refunds/pending',
-      { headers }
+      { headers, params: { tenant_id: currentTenantId(tenantId) } }
     );
     return response.data;
   },
 
-  async approve(requestId: string): Promise<RefundApprovalActionResponse> {
+  async approve(requestId: string, tenantId?: string): Promise<RefundApprovalActionResponse> {
     const headers = getAuthHeaders();
     const response = await apiClient.post<RefundApprovalActionResponse>(
       `/api/admin/refunds/${requestId}/approve`,
       {},
-      { headers }
+      { headers, params: { tenant_id: currentTenantId(tenantId) } }
     );
     return response.data;
   },
 
-  async reject(requestId: string, note: string): Promise<RefundApprovalActionResponse> {
+  async reject(requestId: string, note: string, tenantId?: string): Promise<RefundApprovalActionResponse> {
     const headers = getAuthHeaders();
     const response = await apiClient.post<RefundApprovalActionResponse>(
       `/api/admin/refunds/${requestId}/reject`,
       { note },
-      { headers }
+      { headers, params: { tenant_id: currentTenantId(tenantId) } }
     );
     return response.data;
   },

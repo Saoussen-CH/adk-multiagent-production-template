@@ -29,7 +29,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 EVAL_DATASETS = sorted(
-    glob.glob(str(REPO_ROOT / "tests/unit/*.test.json")) + glob.glob(str(REPO_ROOT / "tests/integration/*.evalset.json"))
+    glob.glob(str(REPO_ROOT / "tests/unit/*.test.json"))
+    + glob.glob(str(REPO_ROOT / "tests/integration/*.evalset.json"))
 )
 
 # Files whose ADK session creation must always pass a tenant_id in state.
@@ -56,9 +57,7 @@ def test_every_recorded_eval_case_has_a_tenant_id_in_session_state():
             state = (case.get("session_input") or {}).get("state") or {}
             if not state.get("tenant_id"):
                 missing.append(f"{Path(path).name}::{case.get('eval_id')}")
-    assert missing == [], (
-        "these recorded eval sessions would hit MissingTenantError on replay: " + ", ".join(missing)
-    )
+    assert missing == [], "these recorded eval sessions would hit MissingTenantError on replay: " + ", ".join(missing)
 
 
 def test_recorded_eval_cases_all_use_the_same_tenant():

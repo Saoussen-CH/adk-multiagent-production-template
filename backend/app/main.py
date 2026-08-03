@@ -8,7 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from customer_support_mas.providers.registry import get_provider
 from customer_support_mas.rate_limiting import check_tenant_rate_limit
+from customer_support_mas.tenancy.config import TenantNotFoundError, load_tenant_config
 
 from . import auth, refund_approvals
 from .agent_client import agent_client
@@ -397,6 +399,21 @@ async def chat(
                 detail="Authentication required. Use Authorization header or X-User-Id for anonymous users.",
             )
 
+        # Resolve the tenant BEFORE anything else touches request.tenant_id.
+        # It is a caller-supplied string: without this check an unknown value
+        # would (a) be accepted as a rate-limit bucket key, letting any client
+        # burn another tenant's budget by claiming their id, and grow
+        # rate_limiting._buckets without bound on arbitrary strings, and
+        # (b) survive all the way into a tool call, where the resulting
+        # TenantNotFoundError is swallowed by @tool_error_handler into a
+        # vague chat reply instead of a clean 404. load_tenant_config is
+        # in-process cached, so on the hot path this is a dict lookup.
+        try:
+            load_tenant_config(request.tenant_id)
+        except TenantNotFoundError:
+            logger.warning("Chat request for unknown tenant", tenant_id=request.tenant_id)
+            raise HTTPException(status_code=404, detail=f"Unknown tenant_id: {request.tenant_id}")
+
         # Per-tenant rate limit — an additional ceiling on top of the
         # per-user RateLimitDependency("chat") check above, not a
         # replacement for it: prevents one tenant from starving others
@@ -638,39 +655,129 @@ async def get_session_messages(
 # =============================================================================
 
 
-@app.get("/api/admin/refunds/pending")
-async def pending_refunds(approver_id: str = Depends(require_approver)):
-    """List all PENDING_APPROVAL refund requests. Approver-only."""
+def resolve_refund_request_store(tenant_id: str):
+    """Return the Firestore handle holding `tenant_id`'s refund_requests.
+
+    This must be the *tenant's own* database — `process_refund` stages
+    PENDING_APPROVAL documents into `get_provider(tenant_id)._db`, so an
+    approver API reading from a single hardcoded `database_id` (as this
+    module used to) can only ever see the one tenant whose configured
+    `database_id` happens to match. For every other tenant the approval
+    queue looked empty and approving raised "not found" — the HITL refund
+    workflow was silently broken for all of them.
+
+    Raises 404 for an unknown tenant and 501 for a provider with no
+    refund-staging store of its own (a Shopify-backed tenant: refund staging
+    is this product's workflow layer, not something Shopify hosts — see
+    customer_support_mas/agents/refund/tools.py's matching guard).
+    """
     try:
-        return {"requests": refund_approvals.list_pending(db.db)}
+        provider = get_provider(tenant_id)
+    except TenantNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Unknown tenant_id: {tenant_id}")
+
+    store = getattr(provider, "_db", None)
+    if store is None:
+        raise HTTPException(
+            status_code=501,
+            detail=f"Tenant {tenant_id} uses a provider with no refund-request store; refund approval is unavailable",
+        )
+    return store
+
+
+def require_approver_for_tenant(tenant_id: str, approver_id: str = Depends(require_approver)) -> str:
+    """`require_approver` plus a tenant check, for the tenant-scoped admin
+    endpoints.
+
+    NOTE (known gap, deliberately not papered over): user documents carry no
+    `tenant_id` today, so this can only enforce the check for users that DO
+    have one. Any approver-role user can therefore still address any
+    tenant's queue. Closing that properly needs a tenant-membership model on
+    users (or per-tenant approver roles), which is a larger auth change than
+    this fix; the check is written so that adding the field to user docs is
+    a data change rather than a code change.
+    """
+    user = db.get_user(approver_id) or {}
+    user_tenant = user.get("tenant_id")
+    if user_tenant is not None and user_tenant != tenant_id:
+        raise HTTPException(status_code=403, detail="Approver is not authorized for this tenant")
+    return approver_id
+
+
+@app.get("/api/admin/refunds/pending")
+async def pending_refunds(tenant_id: str, approver_id: str = Depends(require_approver_for_tenant)):
+    """List a tenant's PENDING_APPROVAL refund requests. Approver-only.
+
+    `tenant_id` is a required query parameter — there is no default tenant,
+    and enumerating every tenant's queue from one endpoint would both cost a
+    Firestore connection per tenant and hand one merchant's approver another
+    merchant's customer data.
+    """
+    try:
+        store = resolve_refund_request_store(tenant_id)
+        return {"requests": refund_approvals.list_pending(store, tenant_id)}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Unexpected error listing pending refunds", error=str(e), exc_info=True)
+        logger.error("Unexpected error listing pending refunds", tenant_id=tenant_id, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to list pending refunds")
 
 
 @app.post("/api/admin/refunds/{request_id}/approve")
-async def approve_refund_endpoint(request_id: str, approver_id: str = Depends(require_approver)):
-    """Approve a pending refund request and execute the refund. Approver-only."""
+async def approve_refund_endpoint(
+    request_id: str, tenant_id: str, approver_id: str = Depends(require_approver_for_tenant)
+):
+    """Approve a pending refund request and execute the refund. Approver-only.
+
+    `tenant_id` is required rather than read off the staged document,
+    because the document has to be located before it can be read — and it
+    lives in that tenant's own database. It is then matched against the
+    document's own `tenant_id` inside `refund_approvals._get_request`, so a
+    mismatch is a 404, never a cross-tenant write.
+    """
     try:
-        return refund_approvals.approve_refund(db.db, request_id, approver_id)
+        store = resolve_refund_request_store(tenant_id)
+        return refund_approvals.approve_refund(store, tenant_id, request_id, approver_id)
+    except HTTPException:
+        raise
     except refund_approvals.ApprovalError as exc:
         status_code = {"not_found": 404, "not_pending": 409, "self_approval": 403}.get(exc.code, 400)
         raise HTTPException(status_code=status_code, detail=str(exc))
     except Exception as e:
-        logger.error("Unexpected error approving refund", request_id=request_id, error=str(e), exc_info=True)
+        logger.error(
+            "Unexpected error approving refund",
+            request_id=request_id,
+            tenant_id=tenant_id,
+            error=str(e),
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail="Failed to approve refund")
 
 
 @app.post("/api/admin/refunds/{request_id}/reject")
-async def reject_refund_endpoint(request_id: str, body: dict = {}, approver_id: str = Depends(require_approver)):
+async def reject_refund_endpoint(
+    request_id: str,
+    tenant_id: str,
+    body: dict = {},
+    approver_id: str = Depends(require_approver_for_tenant),
+):
     """Reject a pending refund request. Never writes to the refunds collection. Approver-only."""
     try:
-        return refund_approvals.reject_refund(db.db, request_id, approver_id, note=body.get("note", ""))
+        store = resolve_refund_request_store(tenant_id)
+        return refund_approvals.reject_refund(store, tenant_id, request_id, approver_id, note=body.get("note", ""))
+    except HTTPException:
+        raise
     except refund_approvals.ApprovalError as exc:
         status_code = {"not_found": 404, "not_pending": 409}.get(exc.code, 400)
         raise HTTPException(status_code=status_code, detail=str(exc))
     except Exception as e:
-        logger.error("Unexpected error rejecting refund", request_id=request_id, error=str(e), exc_info=True)
+        logger.error(
+            "Unexpected error rejecting refund",
+            request_id=request_id,
+            tenant_id=tenant_id,
+            error=str(e),
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail="Failed to reject refund")
 
 

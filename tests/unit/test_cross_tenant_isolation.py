@@ -202,3 +202,151 @@ def test_process_refund_stages_request_with_its_own_tenant_id(isolated_tenants, 
     assert result["status"] == "pending_approval"
     staged = db_a.collection("refund_requests").document(result["request_id"]).get().to_dict()
     assert staged["tenant_id"] == "tenant-a"
+
+
+# =============================================================================
+# Finding I2 — nothing stopped two tenants being configured onto one database
+#
+# Light-tier isolation is physical: one named Firestore database per tenant
+# inside a shared pool project (spec section 6). The shipped fixture points
+# "acme-electronics" at "customer-support-db", the shared default — onboarding
+# a second tenant by copying that fixture would have collapsed isolation to
+# zero, silently, with each tenant reading the other's orders. Every guarantee
+# proven above rests on that assumption holding, so it is asserted here rather
+# than assumed.
+# =============================================================================
+
+
+@pytest.fixture
+def clean_tenant_config_cache():
+    from customer_support_mas.tenancy import config as config_module
+
+    config_module.invalidate_tenant_config_cache()
+    yield config_module
+    config_module.invalidate_tenant_config_cache()
+
+
+def _tenant_doc(tenant_id, database_id, pool_id="light-pool-1"):
+    return {
+        "tenant_id": tenant_id,
+        "tier": "light",
+        "provider_type": "firestore",
+        "provider_config": {"database_id": database_id},
+        "pool_id": pool_id,
+        "refund_policy_ref": tenant_id,
+    }
+
+
+def test_two_tenants_in_one_pool_cannot_share_a_database(mock_db, clean_tenant_config_cache):
+    from customer_support_mas.tenancy.config import TenantConfigConflictError, load_tenant_config
+
+    mock_db.collection("tenants").document("tenant-one").set(_tenant_doc("tenant-one", "shared-db"))
+    mock_db.collection("tenants").document("tenant-two").set(_tenant_doc("tenant-two", "shared-db"))
+
+    load_tenant_config("tenant-one")
+
+    with pytest.raises(TenantConfigConflictError) as exc_info:
+        load_tenant_config("tenant-two")
+
+    message = str(exc_info.value)
+    assert "tenant-one" in message and "tenant-two" in message and "shared-db" in message
+
+
+def test_a_conflicting_tenant_never_resolves_to_a_provider(mock_db, clean_tenant_config_cache):
+    """The conflict must stop provider construction, not merely log — otherwise
+    the second tenant still gets a working handle on the first's data."""
+    from customer_support_mas.providers.registry import get_provider
+    from customer_support_mas.tenancy.config import TenantConfigConflictError
+
+    mock_db.collection("tenants").document("tenant-one").set(_tenant_doc("tenant-one", "shared-db"))
+    mock_db.collection("tenants").document("tenant-two").set(_tenant_doc("tenant-two", "shared-db"))
+
+    get_provider("tenant-one")
+
+    with pytest.raises(TenantConfigConflictError):
+        get_provider("tenant-two")
+
+
+def test_distinct_databases_in_one_pool_are_fine(mock_db, clean_tenant_config_cache):
+    from customer_support_mas.tenancy.config import load_tenant_config
+
+    mock_db.collection("tenants").document("tenant-one").set(_tenant_doc("tenant-one", "tenant-one-db"))
+    mock_db.collection("tenants").document("tenant-two").set(_tenant_doc("tenant-two", "tenant-two-db"))
+
+    assert load_tenant_config("tenant-one").provider_config["database_id"] == "tenant-one-db"
+    assert load_tenant_config("tenant-two").provider_config["database_id"] == "tenant-two-db"
+
+
+def test_same_database_name_in_different_pools_is_allowed(mock_db, clean_tenant_config_cache):
+    """Pools are separate GCP projects, so an identically-named database in
+    two of them is two different databases — not a conflict."""
+    from customer_support_mas.tenancy.config import load_tenant_config
+
+    mock_db.collection("tenants").document("tenant-one").set(
+        _tenant_doc("tenant-one", "commerce-db", pool_id="light-pool-1")
+    )
+    mock_db.collection("tenants").document("tenant-two").set(
+        _tenant_doc("tenant-two", "commerce-db", pool_id="light-pool-2")
+    )
+
+    load_tenant_config("tenant-one")
+    load_tenant_config("tenant-two")  # must not raise
+
+
+def test_reloading_the_same_tenant_is_not_a_conflict_with_itself(mock_db, clean_tenant_config_cache):
+    from customer_support_mas.tenancy.config import invalidate_tenant_config_cache, load_tenant_config
+
+    mock_db.collection("tenants").document("tenant-one").set(_tenant_doc("tenant-one", "tenant-one-db"))
+
+    load_tenant_config("tenant-one")
+    invalidate_tenant_config_cache("tenant-one")
+    load_tenant_config("tenant-one")  # must not raise
+
+
+def test_assert_unique_datastores_validates_a_whole_collection(clean_tenant_config_cache):
+    """Whole-collection validation, for an onboarding/seeding step that wants
+    the answer before the second tenant's first request rather than after."""
+    from customer_support_mas.tenancy.config import (
+        TenantConfig,
+        TenantConfigConflictError,
+        assert_unique_datastores,
+    )
+
+    def _config(tenant_id, database_id, provider_type="firestore", pool_id="light-pool-1"):
+        return TenantConfig(
+            tenant_id=tenant_id,
+            tier="light",
+            provider_type=provider_type,
+            provider_config=({"database_id": database_id} if provider_type == "firestore" else {"shop_domain": "x"}),
+            pool_id=pool_id,
+        )
+
+    assert_unique_datastores([_config("a", "a-db"), _config("b", "b-db")])
+
+    with pytest.raises(TenantConfigConflictError):
+        assert_unique_datastores([_config("a", "shared"), _config("b", "shared")])
+
+    # Shopify-backed tenants have no database of ours to keep unique.
+    assert_unique_datastores([_config("a", None, provider_type="shopify"), _config("b", None, provider_type="shopify")])
+
+
+def test_the_seeded_tenant_collection_has_no_datastore_conflicts(mock_db, clean_tenant_config_cache):
+    """Release gate on the shipped fixture itself: whatever
+    customer_support_mas/database/fixtures.py seeds must be internally
+    consistent."""
+    from customer_support_mas.tenancy.config import TenantConfig, assert_unique_datastores
+
+    configs = [
+        TenantConfig(
+            tenant_id=doc.to_dict()["tenant_id"],
+            tier=doc.to_dict()["tier"],
+            provider_type=doc.to_dict()["provider_type"],
+            provider_config=doc.to_dict().get("provider_config", {}),
+            pool_id=doc.to_dict().get("pool_id"),
+            project_id=doc.to_dict().get("project_id"),
+        )
+        for doc in mock_db.collection("tenants").stream()
+    ]
+
+    assert configs, "expected the fixtures to seed at least one tenant"
+    assert_unique_datastores(configs)

@@ -65,17 +65,31 @@ def test_backend_dockerfile_copies_the_package_source():
     )
 
 
+# Test modules that import backend.app.main, and therefore need the backend
+# workspace member's own dependencies installed (fastapi, email-validator,
+# pydantic-settings ...) — which `uv sync --group dev` alone does NOT do.
+BACKEND_IMPORTING_TESTS = (
+    "test_admin_refund_endpoints.py",
+    "test_chat_tenant_validation.py",
+)
+
+
 def test_ci_installs_workspace_member_dependencies():
-    """`uv sync --group dev` alone does not install the backend workspace
-    member's deps (fastapi, email-validator, ...), so CI steps that run
-    tests importing backend.app.main need --all-packages (finding I8)."""
-    for pipeline in ("cloudbuild/release.yaml", "cloudbuild/release-staging.yaml", "cloudbuild/cloudbuild-deploy.yaml"):
-        contents = _read(pipeline)
-        if "test_admin_refund_endpoints.py" not in contents:
+    """Finding I8: any pipeline that runs a backend-importing test must sync
+    with --all-packages, or the test fails at collection in CI."""
+    pipelines = sorted(p.name for p in (REPO_ROOT / "cloudbuild").glob("*.yaml"))
+    assert pipelines, "expected cloudbuild pipelines to exist"
+
+    checked = 0
+    for pipeline in pipelines:
+        contents = _read(f"cloudbuild/{pipeline}")
+        if not any(test in contents for test in BACKEND_IMPORTING_TESTS):
             continue
+        checked += 1
         assert "uv sync --frozen --all-packages --group dev" in contents, (
-            f"{pipeline} runs tests importing backend.app.main but syncs without --all-packages"
+            f"cloudbuild/{pipeline} runs tests importing backend.app.main but syncs without --all-packages"
         )
+    assert checked, "expected at least one pipeline to run a backend-importing test"
 
 
 # =============================================================================
@@ -87,9 +101,7 @@ def test_backend_import_chain_does_not_build_the_agent_graph():
     """Run in a clean subprocess with GOOGLE_CLOUD_PROJECT unset: the backend's
     imports must succeed and must not pull in config.py / main.py / any agent."""
     script = (
-        "import sys\n"
-        + "".join(f"import {module}\n" for module in BACKEND_IMPORTS)
-        + "leaked = sorted(\n"
+        "import sys\n" + "".join(f"import {module}\n" for module in BACKEND_IMPORTS) + "leaked = sorted(\n"
         "    m for m in sys.modules\n"
         "    if m in ('customer_support_mas.main', 'customer_support_mas.config')\n"
         "    or m.startswith('customer_support_mas.agents')\n"

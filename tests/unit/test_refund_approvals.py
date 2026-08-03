@@ -115,11 +115,66 @@ def _stage(
     return request_id
 
 
+def test_list_pending_ignores_another_tenants_requests_in_the_same_database():
+    """Defence in depth for finding C4. The primary guard is that each tenant's
+    refund_requests live in that tenant's own Firestore database; this is the
+    guard that still holds if two tenants are ever mis-configured onto one
+    database (which is exactly what finding I2's uniqueness check exists to
+    prevent).
+    """
+    db = _active_db_client()
+    ours = _stage(db)
+    theirs = _stage(db, order_id="ORD-77777", tenant_id="other-tenant")
+
+    pending = list_pending(db, TEST_TENANT_ID)
+
+    request_ids = [p["request_id"] for p in pending]
+    assert ours in request_ids
+    assert theirs not in request_ids
+
+
+def test_approve_refuses_a_request_belonging_to_another_tenant():
+    """Reported as not_found, not a distinct error: an approver acting for one
+    tenant must not be able to probe whether a request_id exists elsewhere."""
+    db = _active_db_client()
+    rid = _stage(db, tenant_id="other-tenant")
+
+    with pytest.raises(ApprovalError) as exc_info:
+        approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
+
+    assert exc_info.value.code == "not_found"
+    assert list(db.collection("refunds").stream()) == []
+    assert db.collection("refund_requests").document(rid).get().to_dict()["status"] == "PENDING_APPROVAL"
+
+
+def test_reject_refuses_a_request_belonging_to_another_tenant():
+    db = _active_db_client()
+    rid = _stage(db, tenant_id="other-tenant")
+
+    with pytest.raises(ApprovalError) as exc_info:
+        reject_refund(db, TEST_TENANT_ID, rid, "approver-1")
+
+    assert exc_info.value.code == "not_found"
+    assert db.collection("refund_requests").document(rid).get().to_dict()["status"] == "PENDING_APPROVAL"
+
+
+def test_expire_stale_leaves_another_tenants_requests_alone():
+    db = _active_db_client()
+    ours = _stage(db, expires_at=STALE_EXPIRES_AT)
+    theirs = _stage(db, order_id="ORD-77777", expires_at=STALE_EXPIRES_AT, tenant_id="other-tenant")
+
+    flipped = expire_stale(db, TEST_TENANT_ID)
+
+    assert flipped == 1
+    assert db.collection("refund_requests").document(ours).get().to_dict()["status"] == "EXPIRED"
+    assert db.collection("refund_requests").document(theirs).get().to_dict()["status"] == "PENDING_APPROVAL"
+
+
 def test_list_pending_returns_staged():
     db = _active_db_client()
     rid = _stage(db)
 
-    pending = list_pending(db)
+    pending = list_pending(db, TEST_TENANT_ID)
 
     assert [p["request_id"] for p in pending] == [rid]
     assert pending[0]["order_id"] == "ORD-12345"
@@ -130,9 +185,9 @@ def test_list_pending_excludes_non_pending():
     db = _active_db_client()
     _stage(db)
     rid2 = _stage(db, order_id="ORD-99999")
-    approve_refund(db, rid2, approver_id="approver-1")
+    approve_refund(db, TEST_TENANT_ID, rid2, approver_id="approver-1")
 
-    pending = list_pending(db)
+    pending = list_pending(db, TEST_TENANT_ID)
 
     assert len(pending) == 1
     assert pending[0]["order_id"] == "ORD-12345"
@@ -142,7 +197,7 @@ def test_approve_executes_once():
     db = _active_db_client()
     rid = _stage(db)
 
-    result = approve_refund(db, rid, approver_id="approver-1")
+    result = approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
 
     assert result["status"] == "approved"
     assert result["refund_id"]
@@ -172,7 +227,7 @@ def test_approve_executes_once():
     # Second approval attempt: must be rejected as not_pending and must NOT
     # write a second refund record (this is the money-safety invariant).
     with pytest.raises(ApprovalError) as exc:
-        approve_refund(db, rid, approver_id="approver-1")
+        approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
     assert exc.value.code == "not_pending"
     assert len(list(db.collection("refunds").stream())) == 1  # still exactly one
 
@@ -181,7 +236,7 @@ def test_approve_not_found():
     db = _active_db_client()
 
     with pytest.raises(ApprovalError) as exc:
-        approve_refund(db, "REFREQ-does-not-exist", approver_id="approver-1")
+        approve_refund(db, TEST_TENANT_ID, "REFREQ-does-not-exist", approver_id="approver-1")
 
     assert exc.value.code == "not_found"
     assert list(db.collection("refunds").stream()) == []
@@ -192,7 +247,7 @@ def test_self_approval_blocked():
     rid = _stage(db, user_id="approver-1")
 
     with pytest.raises(ApprovalError) as exc:
-        approve_refund(db, rid, approver_id="approver-1")
+        approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
 
     assert exc.value.code == "self_approval"
     assert list(db.collection("refunds").stream()) == []
@@ -214,13 +269,13 @@ def test_self_approval_reported_even_when_already_resolved():
     db = _active_db_client()
     rid = _stage(db, user_id="demo-user-001")
     # A different, legitimate approver resolves the request first.
-    approve_refund(db, rid, approver_id="approver-1")
+    approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
     assert db.collection("refund_requests").document(rid).get().to_dict()["status"] == "APPROVED"
 
     # The original requester now attempts to "approve" their own
     # already-resolved request.
     with pytest.raises(ApprovalError) as exc:
-        approve_refund(db, rid, approver_id="demo-user-001")
+        approve_refund(db, TEST_TENANT_ID, rid, approver_id="demo-user-001")
 
     assert exc.value.code == "self_approval"
     # No second refund record was written.
@@ -231,7 +286,7 @@ def test_reject_does_not_execute():
     db = _active_db_client()
     rid = _stage(db)
 
-    result = reject_refund(db, rid, "approver-1", note="no evidence")
+    result = reject_refund(db, TEST_TENANT_ID, rid, "approver-1", note="no evidence")
 
     assert result["status"] == "rejected"
     assert list(db.collection("refunds").stream()) == []
@@ -246,7 +301,7 @@ def test_reject_not_found():
     db = _active_db_client()
 
     with pytest.raises(ApprovalError) as exc:
-        reject_refund(db, "REFREQ-does-not-exist", "approver-1")
+        reject_refund(db, TEST_TENANT_ID, "REFREQ-does-not-exist", "approver-1")
 
     assert exc.value.code == "not_found"
 
@@ -254,10 +309,10 @@ def test_reject_not_found():
 def test_reject_twice_is_not_pending():
     db = _active_db_client()
     rid = _stage(db)
-    reject_refund(db, rid, "approver-1")
+    reject_refund(db, TEST_TENANT_ID, rid, "approver-1")
 
     with pytest.raises(ApprovalError) as exc:
-        reject_refund(db, rid, "approver-1")
+        reject_refund(db, TEST_TENANT_ID, rid, "approver-1")
 
     assert exc.value.code == "not_pending"
 
@@ -267,7 +322,7 @@ def test_expire_stale_flips_only_past_deadline():
     fresh_id = _stage(db)  # far-future expires_at — must remain pending
     stale_id = _stage(db, order_id="ORD-77777", expires_at=STALE_EXPIRES_AT)
 
-    flipped = expire_stale(db)
+    flipped = expire_stale(db, TEST_TENANT_ID)
 
     assert flipped == 1
     assert db.collection("refund_requests").document(stale_id).get().to_dict()["status"] == "EXPIRED"
@@ -277,9 +332,9 @@ def test_expire_stale_flips_only_past_deadline():
 def test_expire_stale_ignores_already_resolved_requests():
     db = _active_db_client()
     rid = _stage(db, expires_at=STALE_EXPIRES_AT)
-    approve_refund(db, rid, approver_id="approver-1")
+    approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
 
-    flipped = expire_stale(db)
+    flipped = expire_stale(db, TEST_TENANT_ID)
 
     assert flipped == 0
     assert db.collection("refund_requests").document(rid).get().to_dict()["status"] == "APPROVED"

@@ -19,11 +19,26 @@ Firestore collection reference here.
 
 All functions here are plain, side-effect-explicit functions that take a raw
 Firestore client (or an in-memory test double with the same surface) as their
-first argument — e.g. ``Database(project_id, database_id).db`` in production,
-or ``tests.mock_firestore.MockFirestoreClient()`` in tests. Nothing here
+first argument, plus the ``tenant_id`` that client belongs to. Nothing here
 imports ``backend.app.database`` or holds any module-level client state, so
-callers (Task 10's API endpoints, or a scheduled job for ``expire_stale``)
-inject whichever client they already have.
+callers (the API endpoints in ``backend/app/main.py``, or a scheduled job for
+``expire_stale``) inject whichever client they already have.
+
+**The ``db`` handle must be the requesting tenant's own Firestore database**
+— the one behind ``get_provider(tenant_id)._db``, which is where
+``process_refund`` stages its ``PENDING_APPROVAL`` documents. It used to be a
+single hardcoded ``database_id="customer-support-db"`` handle in
+``main.py``, which happened to coincide with the one seeded tenant's
+database and so masked a split brain: for any tenant configured with a
+different ``database_id``, staged refunds were invisible to the approver
+queue and ``approve_refund`` raised "not_found".
+
+``tenant_id`` is also matched against each document's own ``tenant_id``
+field (written at staging time) rather than trusted implicitly from the
+handle. That is defence in depth, not redundancy: it is the guard that still
+holds if two tenants are ever mis-configured onto the same database, and it
+turns "wrong tenant for this request_id" into an explicit ``not_found``
+instead of a cross-tenant write.
 
 Concurrency note: a real Firestore-backed deployment should run
 ``approve_refund``'s read-check-write inside ``db.transaction()`` so a
@@ -76,28 +91,39 @@ class ApprovalError(Exception):
         super().__init__(message or code)
 
 
-def _get_request(db, request_id: str) -> Dict[str, Any]:
-    """Read a refund_requests doc by id, or raise ApprovalError('not_found')."""
+def _get_request(db, tenant_id: str, request_id: str) -> Dict[str, Any]:
+    """Read one tenant's refund_requests doc by id, or raise
+    ApprovalError('not_found').
+
+    A document belonging to a different tenant is reported as not_found
+    rather than as a distinct error: an approver acting for tenant A must
+    not be able to probe whether a request_id exists under tenant B.
+    """
     snap = db.collection(REFUND_REQUESTS_COLLECTION).document(request_id).get()
     if not snap.exists:
         raise ApprovalError("not_found", f"No refund request found with id {request_id!r}")
-    return snap.to_dict()
+    request = snap.to_dict()
+    if request.get("tenant_id") != tenant_id:
+        raise ApprovalError("not_found", f"No refund request found with id {request_id!r}")
+    return request
 
 
-def list_pending(db) -> List[Dict[str, Any]]:
-    """Return all PENDING_APPROVAL refund requests, each with its request_id."""
+def list_pending(db, tenant_id: str) -> List[Dict[str, Any]]:
+    """Return this tenant's PENDING_APPROVAL refund requests, each with its
+    request_id. Requests belonging to any other tenant are never returned,
+    even if they happen to live in the same database."""
     pending = []
     for snap in db.collection(REFUND_REQUESTS_COLLECTION).stream():
         data = snap.to_dict()
-        if data.get("status") == PENDING_APPROVAL:
+        if data.get("status") == PENDING_APPROVAL and data.get("tenant_id") == tenant_id:
             entry = dict(data)
             entry["request_id"] = snap.id
             pending.append(entry)
     return pending
 
 
-def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
-    """Approve a pending refund request and execute the refund.
+def approve_refund(db, tenant_id: str, request_id: str, approver_id: str) -> Dict[str, Any]:
+    """Approve one tenant's pending refund request and execute the refund.
 
     Dual control: the approver may not be the original requester.
     Idempotent: re-checks status == PENDING_APPROVAL immediately before
@@ -105,7 +131,7 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
     ApprovalError("not_pending") on the second call instead of writing a
     second refund record.
     """
-    request = _get_request(db, request_id)
+    request = _get_request(db, tenant_id, request_id)
     doc_ref = db.collection(REFUND_REQUESTS_COLLECTION).document(request_id)
 
     # Dual control — checked as soon as the request is known to exist, before
@@ -125,7 +151,7 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
     if request.get("status") != PENDING_APPROVAL:
         raise ApprovalError("not_pending", f"Refund request {request_id!r} is not pending approval")
 
-    tenant_id = request["tenant_id"]
+    # _get_request already proved request["tenant_id"] == tenant_id.
     order_id = request["order_id"]
     user_id = request["user_id"]  # the ORIGINAL requester, not the approver
     items = request["items"]
@@ -162,9 +188,7 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
     #     field nothing currently reads. If a consumer needs it, prefer
     #     having process_refund() capture order_data.get("total") into the
     #     request doc at staging time, not adding a lookup here.
-    items_with_refund_amount = [
-        {**item, "refund_amount": item.get("price", 0) * item.get("qty", 1)} for item in items
-    ]
+    items_with_refund_amount = [{**item, "refund_amount": item.get("price", 0) * item.get("qty", 1)} for item in items]
 
     provider = get_provider(tenant_id)
     result = provider.execute_refund(
@@ -198,9 +222,10 @@ def approve_refund(db, request_id: str, approver_id: str) -> Dict[str, Any]:
     return {"status": "approved", "refund_id": refund_id}
 
 
-def reject_refund(db, request_id: str, approver_id: str, note: str = "") -> Dict[str, Any]:
-    """Reject a pending refund request. Never writes to the refunds collection."""
-    request = _get_request(db, request_id)
+def reject_refund(db, tenant_id: str, request_id: str, approver_id: str, note: str = "") -> Dict[str, Any]:
+    """Reject one tenant's pending refund request. Never writes to the refunds
+    collection."""
+    request = _get_request(db, tenant_id, request_id)
     doc_ref = db.collection(REFUND_REQUESTS_COLLECTION).document(request_id)
 
     if request.get("status") != PENDING_APPROVAL:
@@ -220,17 +245,21 @@ def reject_refund(db, request_id: str, approver_id: str, note: str = "") -> Dict
     return {"status": "rejected"}
 
 
-def expire_stale(db) -> int:
-    """Flip PENDING_APPROVAL requests whose expires_at has passed to EXPIRED.
+def expire_stale(db, tenant_id: str) -> int:
+    """Flip this tenant's PENDING_APPROVAL requests whose expires_at has passed
+    to EXPIRED.
 
-    Returns the number of requests flipped.
+    Returns the number of requests flipped. Scoped to one tenant like every
+    other function here, so a scheduled job sweeps tenants explicitly rather
+    than reaching across all of them through whichever handle it happens to
+    hold.
     """
     now = datetime.now(timezone.utc)
     flipped = 0
 
     for snap in db.collection(REFUND_REQUESTS_COLLECTION).stream():
         request = snap.to_dict()
-        if request.get("status") != PENDING_APPROVAL:
+        if request.get("status") != PENDING_APPROVAL or request.get("tenant_id") != tenant_id:
             continue
 
         expires_at_str = request.get("expires_at")

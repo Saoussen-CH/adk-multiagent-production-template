@@ -453,8 +453,29 @@ def process_refund(order_id: str, reason_code: str, tool_context: ToolContext) -
     # CommerceProvider concern — refund staging is this product's own
     # workflow layer) but must resolve to the *tenant's* Firestore database,
     # same narrow exception as policy.py.
+    #
+    # Guarded like policy.py's version, but NOT failing open: policy.py can
+    # safely fall back to DEFAULT_POLICY, whereas there is no safe default
+    # for "where do I stage a refund request". A provider with no `_db`
+    # (ShopifyProvider) would otherwise raise AttributeError here and be
+    # swallowed by @tool_error_handler into a generic "something went
+    # wrong", telling nobody that this tenant's whole refund workflow is
+    # unavailable. Say so explicitly instead.
     provider = get_provider(tenant_id)
-    db = provider._db
+    db = getattr(provider, "_db", None)
+    if db is None:
+        logger.error(
+            "[Refund Workflow - Step 3] Tenant %s uses %s, which has no refund-request store",
+            tenant_id,
+            type(provider).__name__,
+        )
+        return {
+            "status": "unavailable",
+            "message": (
+                "Refund requests can't be submitted for this store yet. "
+                "Please contact support and they'll handle it for you."
+            ),
+        }
 
     # Idempotency check: don't stage a second request while one is already
     # pending for this (tenant, order, user). MockCollection/real Firestore

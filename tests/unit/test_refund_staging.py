@@ -118,5 +118,77 @@ class TestRefundStaging:
         assert list(db.collection("refund_requests").stream()) == []
 
 
+class TestProviderWithoutARefundStore:
+    """Finding I3: process_refund reaches through to `provider._db`, which
+    only FirestoreProvider has. For a Shopify-backed tenant that used to be a
+    bare AttributeError, swallowed by @tool_error_handler into a generic
+    "something went wrong" that told nobody the store's whole refund workflow
+    was unavailable.
+
+    Note this deliberately does NOT fail open the way policy.py's guard does:
+    policy.py can fall back to DEFAULT_POLICY, whereas there is no safe
+    default answer to "where do I stage a refund request".
+    """
+
+    @pytest.fixture
+    def shopify_tool_context(self, mock_db, monkeypatch):
+        r"""A Shopify-backed tenant, with a mock order that clears every check
+        BEFORE the `provider._db` reach-through — otherwise the tool would
+        bail out on ownership first and never reach the code under test.
+
+        (The stub's own `_MOCK_ORDERS` ids don't satisfy validate_order_id's
+        `ORD-\d{5,10}` pattern, so an "ORD-"-shaped one is added here rather
+        than changing the stub's fixture data.)
+        """
+        from customer_support_mas.providers import shopify_provider
+        from customer_support_mas.tenancy import config as config_module
+
+        monkeypatch.setenv("SHOPIFY_MOCK", "true")
+        monkeypatch.setitem(
+            shopify_provider._MOCK_ORDERS,
+            "ORD-12345",
+            {
+                "customer_id": "shopify-customer-1",
+                "status": "Delivered",
+                "items": [{"product_id": "SHOPIFY-PROD-1", "name": "Mock Shopify Product", "price": 29.99, "qty": 1}],
+                "total": 29.99,
+            },
+        )
+        config_module.invalidate_tenant_config_cache()
+        mock_db.collection("tenants").document("shopify-tenant").set(
+            {
+                "tenant_id": "shopify-tenant",
+                "tier": "light",
+                "provider_type": "shopify",
+                "provider_config": {"shop_domain": "mock.myshopify.com"},
+                "pool_id": "test-pool",
+            }
+        )
+        ctx = MagicMock()
+        ctx.state = {"tenant_id": "shopify-tenant"}
+        ctx.user_id = "shopify-customer-1"
+        ctx.actions = MagicMock()
+        yield ctx
+        config_module.invalidate_tenant_config_cache()
+
+    def test_staging_reports_unavailable_instead_of_crashing(self, shopify_tool_context):
+        from customer_support_mas.agents.refund.tools import process_refund
+
+        result = process_refund("ORD-12345", "damaged", shopify_tool_context)
+
+        # "unavailable", not the generic "error" that @tool_error_handler
+        # would have produced from a swallowed AttributeError.
+        assert result["status"] == "unavailable", result
+        assert "support" in result["message"].lower()
+
+    def test_no_refund_request_is_written_anywhere(self, shopify_tool_context, mock_db):
+        from customer_support_mas.agents.refund.tools import process_refund
+
+        process_refund("ORD-12345", "damaged", shopify_tool_context)
+
+        assert list(mock_db.collection("refund_requests").stream()) == []
+        assert list(mock_db.collection("refunds").stream()) == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
