@@ -364,12 +364,15 @@ class Database:
         self.db.collection("users").document(user_id).update({"last_login": datetime.now(timezone.utc)})
 
     @with_retry
-    def create_anonymous_user(self) -> str:
-        """
-        Create an anonymous user (for users who don't register).
+    def create_anonymous_user(self) -> tuple[str, str]:
+        """Create an anonymous user and mint a real credential for them.
 
-        Returns:
-            user_id: Generated anonymous user ID
+        Returns (user_id, token). The token comes from the exact same
+        create_token mechanism registered users get after login/register — no
+        new credential type. Before this, an anonymous user_id was a bare,
+        self-asserted string that any caller could claim via the X-User-Id
+        header with zero proof; this closes that by requiring the same signed,
+        tenant-scoped, expiring token every other identity in this system needs.
         """
         user_id = f"anon-{uuid.uuid4()}"
 
@@ -383,7 +386,8 @@ class Database:
         self.db.collection("users").document(user_id).set(user_data)
         logger.info(f"Created anonymous user: {user_id} for tenant {self.tenant_id}")
 
-        return user_id
+        token = self.create_token(user_id)
+        return user_id, token
 
     # =========================================================================
     # SESSION MANAGEMENT

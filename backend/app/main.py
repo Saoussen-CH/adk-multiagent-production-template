@@ -532,9 +532,9 @@ async def create_anonymous(
     """
     try:
         tenant_db = resolve_tenant_database(request.tenant_id)
-        user_id = tenant_db.create_anonymous_user()
+        user_id, token = tenant_db.create_anonymous_user()
 
-        return AnonymousUserResponse(user_id=user_id, is_anonymous=True)
+        return AnonymousUserResponse(user_id=user_id, token=token, is_anonymous=True)
 
     except HTTPException:
         raise

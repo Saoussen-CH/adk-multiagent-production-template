@@ -60,6 +60,7 @@ class AnonymousUserResponse(BaseModel):
     """Response for anonymous user creation."""
 
     user_id: str = Field(..., description="Anonymous user ID")
+    token: str = Field(..., description="Bearer token for this anonymous session — required on every subsequent request")
     is_anonymous: bool = Field(default=True, description="Flag indicating anonymous user")
 
 
