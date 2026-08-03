@@ -94,6 +94,75 @@ def get_order_details(order_id: str, tool_context: ToolContext, _order_data: dic
 
 
 # =============================================================================
+# ORDER VERIFICATION (step-up for anonymous / not-yet-logged-in visitors)
+# =============================================================================
+
+_MAX_ORDER_VERIFICATION_ATTEMPTS = 3
+
+_GENERIC_VERIFICATION_FAILURE = {
+    "status": "error",
+    "message": "Could not verify those order details. Please check the order number and email and try again.",
+}
+
+
+@tool_error_handler
+def verify_order_access(order_id: str, email: str, tool_context: ToolContext) -> dict:
+    """Verify order-number + email ownership for a visitor who isn't logged
+    in as the order's actual account — the step-up path for anonymous or
+    not-yet-logged-in customers (see docs/superpowers/specs/
+    2026-08-03-anonymous-identity-and-order-verification-design.md).
+
+    On a match, grants access to exactly this one order for the rest of
+    this conversation (tool_context.state["verified_order_ids"]) — never a
+    persistent credential, never broader than the single order verified.
+
+    On a mismatch, returns the exact same response whether the order simply
+    doesn't exist or exists with a different email on file — the caller
+    must not be able to tell those apart. Capped at 3 failed attempts per
+    conversation; once capped, no further attempt is even sent to the
+    provider, so the cap cannot be bypassed by retrying with different
+    correct details after exhausting it.
+    """
+    is_valid, error_msg = validate_order_id(order_id)
+    if not is_valid:
+        return validation_error_response(error_msg)
+
+    tenant_id = get_tenant_id(tool_context)
+
+    failures = tool_context.state.get("order_verification_failures", 0)
+    if failures >= _MAX_ORDER_VERIFICATION_ATTEMPTS:
+        return {
+            "status": "error",
+            "message": (
+                "Too many failed attempts to verify this order. Please log in to your account, "
+                "or contact support through another channel for help with this order."
+            ),
+        }
+
+    provider = get_provider(tenant_id)
+    verified = provider.verify_order_owner(tenant_id, order_id, email)
+
+    if not verified:
+        tool_context.state["order_verification_failures"] = failures + 1
+        if tool_context.state["order_verification_failures"] >= _MAX_ORDER_VERIFICATION_ATTEMPTS:
+            return {
+                "status": "error",
+                "message": (
+                    "Too many failed attempts to verify this order. Please log in to your account, "
+                    "or contact support through another channel for help with this order."
+                ),
+            }
+        return dict(_GENERIC_VERIFICATION_FAILURE)
+
+    verified_order_ids = tool_context.state.get("verified_order_ids", [])
+    if order_id not in verified_order_ids:
+        verified_order_ids = verified_order_ids + [order_id]
+    tool_context.state["verified_order_ids"] = verified_order_ids
+
+    return {"status": "success", "message": f"Order {order_id} verified. How can I help with it?"}
+
+
+# =============================================================================
 # ORDER HISTORY (authenticated user - no specific order ID)
 # =============================================================================
 
