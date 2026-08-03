@@ -68,7 +68,7 @@ def test_third_failure_triggers_the_cap_message(tool_context_with_tenant, monkey
 
     assert third["status"] == "error"
     assert "log in" in third["message"].lower() or "contact" in third["message"].lower()
-    assert tool_context_with_tenant.state["order_verification_failures"] == 3
+    assert tool_context_with_tenant.state["user:order_verification_failures"] == 3
 
 
 def test_fourth_attempt_does_not_retry_even_with_correct_details(tool_context_with_tenant, monkeypatch):
@@ -100,6 +100,30 @@ def test_fourth_attempt_does_not_retry_even_with_correct_details(tool_context_wi
     assert call_count["n"] == calls_before_fourth  # provider was not called a 4th time
 
 
+def test_failure_counter_is_user_scoped_not_session_scoped(tool_context_with_tenant, monkeypatch):
+    """The cap must survive a new conversation. ADK persists state written
+    under State.USER_PREFIX per user_id across ALL of that user's sessions;
+    an unprefixed key is session-scoped and resets to zero on every new chat
+    — and a new chat costs an attacker nothing (POST /api/chat with no
+    session_id). If this assertion is ever weakened, the 3-attempt cap goes
+    back to bounding nothing."""
+    from google.adk.sessions.state import State
+
+    from customer_support_mas.agents.order.tools import _ORDER_VERIFICATION_FAILURES_KEY, verify_order_access
+
+    assert _ORDER_VERIFICATION_FAILURES_KEY.startswith(State.USER_PREFIX)
+
+    monkeypatch.setattr(
+        "customer_support_mas.agents.order.tools.get_provider",
+        lambda tenant_id: MagicMock(verify_order_owner=lambda t, o, e: False),
+    )
+
+    verify_order_access(order_id="ORD-11111", email="wrong@example.com", tool_context=tool_context_with_tenant)
+
+    written_keys = [k for k in tool_context_with_tenant.state if "verification_failures" in k]
+    assert written_keys == [_ORDER_VERIFICATION_FAILURES_KEY]
+
+
 def test_provider_exception_is_indistinguishable_from_a_normal_miss(tool_context_with_tenant, monkeypatch):
     """A provider exception must NOT escape to tool_error_handler's outer
     catch. If it did, the caller would get a different message than a normal
@@ -119,7 +143,7 @@ def test_provider_exception_is_indistinguishable_from_a_normal_miss(tool_context
     result = verify_order_access(order_id="ORD-90001", email="alice@example.com", tool_context=tool_context_with_tenant)
 
     assert result == _GENERIC_VERIFICATION_FAILURE
-    assert tool_context_with_tenant.state["order_verification_failures"] == 1
+    assert tool_context_with_tenant.state["user:order_verification_failures"] == 1
 
 
 @pytest.mark.parametrize("bad_email", [None, "not-an-email", 12345, ""])
@@ -145,7 +169,7 @@ def test_malformed_email_fails_generically_without_reaching_the_provider(
     result = verify_order_access(order_id="ORD-90001", email=bad_email, tool_context=tool_context_with_tenant)
 
     assert result == _GENERIC_VERIFICATION_FAILURE
-    assert tool_context_with_tenant.state["order_verification_failures"] == 1
+    assert tool_context_with_tenant.state["user:order_verification_failures"] == 1
     assert call_count["n"] == 0  # provider was never reached
     assert "verified_order_ids" not in tool_context_with_tenant.state
 

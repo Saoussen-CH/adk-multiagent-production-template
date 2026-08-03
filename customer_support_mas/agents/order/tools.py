@@ -113,6 +113,19 @@ _CAP_EXCEEDED_RESPONSE = {
 }
 
 
+# The failure counter is deliberately USER-scoped, not session-scoped.
+# google.adk.sessions.state.State.USER_PREFIX == "user:" — state under this
+# prefix persists per user_id across ALL of that user's sessions. A plain
+# (session-scoped) key would reset to zero on every new conversation, and a
+# new conversation costs nothing: POST /api/chat with no session_id, up to
+# RATE_LIMITS["chat"] (300/hour). That made the 3-attempt cap bound nothing.
+# With the prefix, the only way to reset it is to mint a whole new anonymous
+# identity via POST /api/auth/anonymous, which RATE_LIMITS["auth"] already
+# caps at 50/hour/IP — so the real bound is <=150 guesses/hour/IP, enforced
+# by infrastructure that already exists.
+_ORDER_VERIFICATION_FAILURES_KEY = "user:order_verification_failures"
+
+
 def _record_verification_failure(tool_context: ToolContext, failures: int) -> dict:
     """Increments the failure counter and returns the response to show — the
     generic miss message, or the cap-exceeded message once the increment
@@ -127,7 +140,7 @@ def _record_verification_failure(tool_context: ToolContext, failures: int) -> di
     guesser nothing against the 3-attempt cap.
     """
     new_failures = failures + 1
-    tool_context.state["order_verification_failures"] = new_failures
+    tool_context.state[_ORDER_VERIFICATION_FAILURES_KEY] = new_failures
     if new_failures >= _MAX_ORDER_VERIFICATION_ATTEMPTS:
         return dict(_CAP_EXCEEDED_RESPONSE)
     return dict(_GENERIC_VERIFICATION_FAILURE)
@@ -147,9 +160,11 @@ def verify_order_access(order_id: str, email: str, tool_context: ToolContext) ->
     On a mismatch, returns the exact same response whether the order simply
     doesn't exist or exists with a different email on file — the caller
     must not be able to tell those apart. Capped at 3 failed attempts per
-    conversation; once capped, no further attempt is even sent to the
-    provider, so the cap cannot be bypassed by retrying with different
-    correct details after exhausting it.
+    USER (not per conversation — see _ORDER_VERIFICATION_FAILURES_KEY above;
+    a session-scoped cap would reset for free on every new chat); once
+    capped, no further attempt is even sent to the provider, so the cap
+    cannot be bypassed by retrying with different correct details after
+    exhausting it.
     """
     is_valid, error_msg = validate_order_id(order_id)
     if not is_valid:
@@ -157,7 +172,7 @@ def verify_order_access(order_id: str, email: str, tool_context: ToolContext) ->
 
     tenant_id = get_tenant_id(tool_context)
 
-    failures = tool_context.state.get("order_verification_failures", 0)
+    failures = tool_context.state.get(_ORDER_VERIFICATION_FAILURES_KEY, 0)
     if failures >= _MAX_ORDER_VERIFICATION_ATTEMPTS:
         return dict(_CAP_EXCEEDED_RESPONSE)
 
