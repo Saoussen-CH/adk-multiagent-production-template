@@ -231,6 +231,26 @@ class FirestoreProvider:
             return False, None, f"You don't have permission to access order {order_id}"
         return True, order, ""
 
+    def verify_order_owner(self, tenant_id: str, order_id: str, email: str) -> bool:
+        """Cross-references the order's customer_id against that customer's
+        account email — both live in this same tenant's physical Firestore
+        database (self._db), so this is a plain raw-Firestore read via the
+        same narrow `_db` reach-through `policy.py` and refund staging
+        already use, not a new dependency on backend/app/database.py."""
+        order = self.get_order(tenant_id, order_id)
+        if order is None or not order.customer_id:
+            return False
+
+        user_doc = self._db.collection("users").document(order.customer_id).get()
+        if not user_doc.exists:
+            return False
+
+        account_email = user_doc.to_dict().get("email")
+        if not account_email:
+            return False
+
+        return account_email.strip().lower() == email.strip().lower()
+
     def verify_invoice_ownership(
         self, tenant_id: str, invoice_id: str, customer_id: str
     ) -> tuple[bool, Optional[Invoice], str]:

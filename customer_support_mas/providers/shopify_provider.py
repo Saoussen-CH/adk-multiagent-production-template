@@ -123,6 +123,14 @@ class ShopifyProvider:
     ) -> tuple[bool, Optional[Invoice], str]:
         return False, None, "Shopify orders have no separate invoice concept"
 
+    def verify_order_owner(self, tenant_id: str, order_id: str, email: str) -> bool:
+        """No account/email concept is modeled in the mock yet (see module
+        docstring — real Shopify OAuth/Admin API sync is future work), so
+        this fails closed unconditionally rather than guessing at a match,
+        consistent with the "must not be able to distinguish which case
+        occurred" constraint on CommerceProvider.verify_order_owner."""
+        return False
+
     def execute_refund(
         self,
         tenant_id: str,

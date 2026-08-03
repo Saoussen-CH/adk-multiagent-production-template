@@ -41,6 +41,16 @@ class CommerceProvider(Protocol):
         self, tenant_id: str, order_id: str, customer_id: str
     ) -> tuple[bool, Optional[Order], str]: ...
 
+    def verify_order_owner(self, tenant_id: str, order_id: str, email: str) -> bool:
+        """Prove order-number + email ownership without requiring the caller
+        to be logged in as the order's actual customer_id — the anonymous/
+        not-yet-logged-in step-up path (see docs/superpowers/specs/
+        2026-08-03-anonymous-identity-and-order-verification-design.md).
+        Returns False for a nonexistent order, a wrong email, or an order
+        whose customer has no matching email on file — the caller must not
+        be able to distinguish which case occurred."""
+        ...
+
     def verify_invoice_ownership(
         self, tenant_id: str, invoice_id: str, customer_id: str
     ) -> tuple[bool, Optional[Invoice], str]: ...
