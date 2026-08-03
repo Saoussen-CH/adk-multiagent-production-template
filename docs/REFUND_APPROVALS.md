@@ -76,7 +76,7 @@ Two extra failure modes come from tenant resolution itself:
 
 | HTTP status | Meaning |
 |-------------|---------|
-| `404` | Unknown `tenant_id` — no `tenants/{tenant_id}` document exists. |
+| `401` | Unknown `tenant_id` — no `tenants/{tenant_id}` document exists. A `401` rather than a `404` because tenant resolution runs ahead of authentication everywhere, and confirming existence there is a tenant-enumeration oracle for unauthenticated callers (`tests/unit/test_tenant_existence_oracle.py`). A live approver could never have seen the old `404` anyway: their bearer token is verified against the named tenant's own store, which fails first. |
 | `501` | The tenant's provider has no refund-request store of its own (a Shopify-backed tenant). Refund staging is this product's workflow layer, not something Shopify hosts. |
 
 > **Known gap:** user documents carry no `tenant_id` today, so

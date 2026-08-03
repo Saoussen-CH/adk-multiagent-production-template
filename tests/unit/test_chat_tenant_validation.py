@@ -80,7 +80,15 @@ def _chat(tenant_id, message="hello", user_id="anon-smoke"):
     )
 
 
-def test_unknown_tenant_is_rejected_with_404(monkeypatch):
+def test_unknown_tenant_is_rejected_before_the_agent_is_ever_queried(monkeypatch):
+    """The rejection is now a 401 that does not name the tenant.
+
+    It used to be `404 Unknown tenant_id: <id>`, which — running as it does
+    ahead of authentication — told an entirely unauthenticated caller which
+    tenant ids exist. The rejection itself is unchanged and is what this test
+    is really about; the *shape* of it is pinned down in
+    tests/unit/test_tenant_existence_oracle.py.
+    """
     called = {}
 
     def _should_not_run(*args, **kwargs):
@@ -91,8 +99,8 @@ def test_unknown_tenant_is_rejected_with_404(monkeypatch):
 
     response = _chat(UNKNOWN_TENANT)
 
-    assert response.status_code == 404
-    assert UNKNOWN_TENANT in response.json()["detail"]
+    assert response.status_code == 401
+    assert UNKNOWN_TENANT not in response.text
     assert "agent" not in called
 
 

@@ -534,14 +534,24 @@ def test_rejecting_another_tenants_request_id_is_404(monkeypatch, mock_db, secon
     )
 
 
-def test_unknown_tenant_is_404_not_an_empty_queue(monkeypatch, mock_db):
-    """An unrecognized tenant_id is a hard error, never a silent fallback."""
+def test_unknown_tenant_is_a_hard_error_not_an_empty_queue(monkeypatch, mock_db):
+    """An unrecognized tenant_id is a hard error, never a silent fallback.
+
+    It is a 401 rather than the 404 it used to be: `resolve_tenant_database`
+    no longer confirms tenant existence to a caller it has not authenticated
+    (tests/unit/test_tenant_existence_oracle.py). Nothing is lost for the real
+    admin flow — with a genuine Authorization header, `get_current_user`
+    resolves the tenant first and 401s there for an unknown one, so this
+    endpoint could never have answered 404 to a live approver anyway. This
+    test reaches `require_approver`'s own resolve directly because
+    `_as_approver` overrides `get_current_user`.
+    """
     _as_approver(monkeypatch, mock_db)
 
     response = client.get("/api/admin/refunds/pending?tenant_id=no-such-tenant")
 
-    assert response.status_code == 404
-    assert "no-such-tenant" in response.json()["detail"]
+    assert response.status_code == 401
+    assert "no-such-tenant" not in response.text
 
 
 def test_provider_without_a_refund_store_is_501_not_a_500(monkeypatch, mock_db, mock_db_factory, tenant_databases):

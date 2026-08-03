@@ -164,18 +164,83 @@ async def shutdown_event():
 #     path operation also declares (two body params of the same name make
 #     FastAPI switch to an embedded body and change the wire format), so chat
 #     resolves the tenant and then authenticates inline, in that order.
+#
+# That ordering had a consequence worth spelling out, because it was a live
+# finding: tenant resolution necessarily runs before authentication, so a
+# tenant-existence error reaches callers who have proven nothing. It used to
+# be `404 Unknown tenant_id: <id>`, while a *known* tenant answered the same
+# credential-less request with 401 — so anyone could enumerate the platform's
+# tenant roster by diffing the two, unauthenticated and (on /api/auth/logout)
+# unthrottled.
+#
+# The rule now: **a caller who has not authenticated never learns whether a
+# tenant exists.** An unknown tenant produces the byte-identical response the
+# same request would have produced for a known tenant — see
+# `unknown_tenant_error_for()` and each endpoint's `unknown_tenant_error=`
+# argument. Existence is revealed only where the caller already holds a valid
+# token *for that tenant* (`resolve_refund_request_store`, behind the approver
+# dependency), where it tells a stranger nothing.
 # =============================================================================
 
 
-def resolve_tenant_database(tenant_id: str) -> Database:
+class UnknownTenant(Exception):
+    """Internal signal: the named tenant does not exist.
+
+    Passed as `unknown_tenant_error` by the one endpoint that must answer an
+    unknown tenant with *success* rather than an error — `/api/auth/logout`,
+    whose whole contract is that revoking an unknown token is a no-op 200.
+    Never escapes to the client.
+    """
+
+
+def unknown_tenant_error_for(
+    authorization: Optional[str],
+    no_credential_detail: str = "Authentication required",
+) -> HTTPException:
+    """The 401 an unknown tenant must return for *this* request.
+
+    Chosen so it is indistinguishable from the response the very same request
+    would have received had the tenant existed — same status, same detail
+    string. The three cases mirror `authenticate_bearer` exactly:
+
+      - no Authorization header  -> the endpoint's own "not authenticated"
+        401 (its wording differs per endpoint, hence the parameter);
+      - malformed header         -> "Invalid authorization header";
+      - well-formed bearer token -> "Invalid or expired token", which is what
+        a known tenant returns for a token its own store does not hold.
+
+    Returning a *generic* 401 for all three would have swapped one oracle for
+    another: a caller could still diff "Invalid or expired token" (known
+    tenant) against a generic 401 (unknown tenant).
+    """
+    if not authorization:
+        return HTTPException(status_code=401, detail=no_credential_detail)
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return HTTPException(status_code=401, detail="Invalid authorization header")
+    return HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+def resolve_tenant_database(tenant_id: str, unknown_tenant_error: Optional[Exception] = None) -> Database:
     """Resolve `tenant_id` to its own account store, or raise a clean HTTP error.
 
     Every tenant-facing entry point funnels through here so that the mapping
     from tenancy errors to status codes exists in exactly one place:
-      - unknown tenant        -> 404 (names the id; it came from the caller)
+      - unknown tenant        -> `unknown_tenant_error`, defaulting to a
+                                 generic `401 Authentication required`. Never
+                                 a 404 naming the id: see the block comment
+                                 above — that was an unauthenticated
+                                 tenant-existence oracle.
       - two tenants, one db   -> 503 (generic: the real message names both
                                 tenants and the shared database)
       - no account db config  -> 503 (generic: same reason)
+
+    Args:
+        tenant_id: caller-supplied tenant id, not yet trusted.
+        unknown_tenant_error: what to raise when no such tenant exists. Pass
+            `unknown_tenant_error_for(authorization, ...)` so the answer
+            matches this endpoint's own "not authenticated" answer; pass
+            `UnknownTenant()` to handle the case without an HTTP error at all.
 
     `load_tenant_config` is called explicitly first, before
     `get_tenant_database` (which calls it again, from its in-process cache).
@@ -188,7 +253,11 @@ def resolve_tenant_database(tenant_id: str) -> Database:
         load_tenant_config(tenant_id)
     except TenantNotFoundError:
         logger.warning("Request for unknown tenant", tenant_id=tenant_id)
-        raise HTTPException(status_code=404, detail=f"Unknown tenant_id: {tenant_id}")
+        # The id itself stays in the logs, where operators can see it and
+        # callers cannot — a legitimate client with a typo'd tenant_id is
+        # diagnosable from the server side without answering the enumeration
+        # question from the client side.
+        raise unknown_tenant_error or HTTPException(status_code=401, detail="Authentication required")
     except TenantConfigConflictError as exc:
         # A misconfiguration, not a client error — and its message names
         # BOTH colliding tenant ids and the shared database name, so it must
@@ -240,9 +309,17 @@ def get_current_user(tenant_id: str, authorization: Optional[str] = Header(None)
     """
     if not authorization:
         # Nothing to verify — don't pay for tenant resolution to say so.
+        # (This is also what keeps a credential-less caller from learning
+        # anything here: the endpoint body resolves the tenant itself, and its
+        # unknown-tenant 401 is the same "Authentication required" it would
+        # have raised for a known tenant with no credentials.)
         return None
 
-    return authenticate_bearer(resolve_tenant_database(tenant_id), authorization)
+    # An unknown tenant must answer exactly as this tenant's own token store
+    # would have for the same header — otherwise the 401/404 split just moves
+    # here. See unknown_tenant_error_for().
+    tenant_db = resolve_tenant_database(tenant_id, unknown_tenant_error=unknown_tenant_error_for(authorization))
+    return authenticate_bearer(tenant_db, authorization)
 
 
 def require_approver(tenant_id: str, user_id: Optional[str] = Depends(get_current_user)) -> str:
@@ -361,6 +438,13 @@ async def register(request: RegisterRequest, _rate_check: bool = Depends(RateLim
     The account is created in that merchant's own Firestore database, so the
     same email registering with a second merchant creates a second,
     independent account rather than colliding with the first.
+
+    An unknown tenant gets the generic 401 rather than a 404 naming it. That
+    does not fully hide tenant existence here and cannot: registration is by
+    definition open to callers who have authenticated nothing, so a *known*
+    tenant answers 200. What it removes is the free, side-effect-less probe —
+    an enumerator now has to actually create an account per guess, which is
+    rate-limited, logged and visible in the tenant's own users collection.
     """
     try:
         tenant_db = resolve_tenant_database(request.tenant_id)
@@ -396,9 +480,16 @@ async def login(request: LoginRequest, _rate_check: bool = Depends(RateLimitDepe
     — that account simply does not exist in this tenant's database, and the
     response is the same generic "Invalid email or password" as for any
     unknown user (never a hint that the email exists elsewhere).
+
+    An unknown *tenant* gets that identical 401 too, one level up: a caller
+    who cannot log in must not learn from the failure whether the merchant
+    they named is on this platform at all.
     """
     try:
-        tenant_db = resolve_tenant_database(request.tenant_id)
+        tenant_db = resolve_tenant_database(
+            request.tenant_id,
+            unknown_tenant_error=HTTPException(status_code=401, detail="Invalid email or password"),
+        )
 
         # Get user by email
         user = tenant_db.get_user_by_email(request.email)
@@ -435,6 +526,9 @@ async def create_anonymous(
 
     Takes a body now (it used to take none): the anonymous user document is
     written to the tenant's own database, so the tenant has to be named.
+
+    Unknown tenant -> the generic 401, same reasoning (and same residual) as
+    `register` above.
     """
     try:
         tenant_db = resolve_tenant_database(request.tenant_id)
@@ -450,7 +544,11 @@ async def create_anonymous(
 
 
 @app.post("/api/auth/logout")
-async def logout(tenant_id: str, authorization: str = Header(...)):
+async def logout(
+    tenant_id: str,
+    authorization: str = Header(...),
+    _rate_check: bool = Depends(RateLimitDependency("auth")),
+):
     """Logout (revoke token).
 
     `tenant_id` is a required query parameter: the token document lives in
@@ -458,19 +556,33 @@ async def logout(tenant_id: str, authorization: str = Header(...)):
     A token issued by another tenant is not reachable here and revoking it
     is a no-op — deliberately reported as success, so this endpoint cannot
     be used to probe which tenant a token belongs to.
+
+    An *unknown* tenant gets that same success, for the same reason: this
+    endpoint used to answer 404 there while answering 200 for every real
+    tenant, which made it a tenant-roster oracle — and, having carried no
+    rate limit at all, an unthrottled one. Both halves are fixed here: the
+    `RateLimitDependency("auth")` above (the same bucket register/login use)
+    and the `UnknownTenant` branch below.
+
+    Note the ordering: the header is parsed *before* the tenant is resolved,
+    so a malformed header is a 400 whether or not the tenant exists. Doing it
+    the other way round would have reintroduced the oracle in the 400-vs-200
+    split.
     """
-    try:
-        tenant_db = resolve_tenant_database(tenant_id)
-
-        # Extract token
-        parts = authorization.split()
-        if len(parts) == 2 and parts[0].lower() == "bearer":
-            token = parts[1]
-            tenant_db.revoke_token(token)
-            return {"status": "logged_out"}
-
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
         raise HTTPException(status_code=400, detail="Invalid authorization header")
 
+    try:
+        tenant_db = resolve_tenant_database(tenant_id, unknown_tenant_error=UnknownTenant())
+    except UnknownTenant:
+        # Nothing to revoke, and saying so would answer the enumeration
+        # question. Identical body to the no-op above.
+        return {"status": "logged_out"}
+
+    try:
+        tenant_db.revoke_token(parts[1])
+        return {"status": "logged_out"}
     except HTTPException:
         raise
     except Exception as e:
@@ -527,13 +639,42 @@ async def chat(
         # It also has to come first for a second reason now: the auth token
         # is verified against this tenant's own token store, so there is no
         # authenticating anyone until the tenant is known.
-        tenant_db = resolve_tenant_database(request.tenant_id)
+        #
+        # Because it comes first, its failure reaches callers who have proven
+        # nothing — so it must not disclose whether the tenant exists. The
+        # error passed in below is exactly the 401 this same request would
+        # have received from a KNOWN tenant (no header -> the "authentication
+        # required" line just below; bad header/token -> what
+        # authenticate_bearer raises).
+        tenant_db = resolve_tenant_database(
+            request.tenant_id,
+            unknown_tenant_error=unknown_tenant_error_for(
+                authorization,
+                "Authentication required. Use Authorization header or X-User-Id for anonymous users.",
+            ),
+        )
 
         # Determine user_id (auth takes precedence over anonymous)
         user_id = authenticate_bearer(tenant_db, authorization)
         actual_user_id = user_id or x_user_id
 
         if not actual_user_id:
+            # Keep this detail string in sync with the one handed to
+            # resolve_tenant_database above: an unknown tenant answers with
+            # this exact response, and any drift between the two reopens the
+            # tenant-existence oracle.
+            #
+            # Residual, deliberately not closed here: `x_user_id` is an
+            # unverified claim, not a credential — the backend never checks
+            # that the anonymous id was issued by this tenant's
+            # /api/auth/anonymous. So a caller who supplies any X-User-Id
+            # still sees 200 for a real tenant vs 401 for an unknown one.
+            # Closing that means making the anonymous id a real credential
+            # (verify it against the tenant's users collection), which changes
+            # the anonymous auth contract for the frontend's localStorage flow
+            # and for tests/smoke/test_smoke.py — a separate change, not one
+            # to smuggle in here. Pinned down, with that reasoning, by
+            # tests/unit/test_tenant_existence_oracle.py's residual section.
             raise HTTPException(
                 status_code=401,
                 detail="Authentication required. Use Authorization header or X-User-Id for anonymous users.",
@@ -677,6 +818,12 @@ async def chat(
 # Cross-tenant access therefore fails twice over: the token doesn't verify
 # against the wrong tenant's store (401), and even an anonymous X-User-Id
 # caller finds no session there (404).
+#
+# Each body below calls `resolve_tenant_database(tenant_id)` with its default
+# unknown-tenant error — `401 Authentication required` — which is verbatim
+# the 401 the same endpoint raises three lines later for a known tenant with
+# no credentials. That equality is the whole point; tests/unit/
+# test_tenant_existence_oracle.py compares the two responses byte for byte.
 # =============================================================================
 
 
@@ -836,6 +983,15 @@ def resolve_refund_request_store(tenant_id: str):
     refund-staging store of its own (a Shopify-backed tenant: refund staging
     is this product's workflow layer, not something Shopify hosts — see
     customer_support_mas/agents/refund/tools.py's matching guard).
+
+    The 404 here is the one place tenant existence *is* disclosed, and that
+    is deliberate: every caller of this function sits behind
+    `require_approver_for_tenant`, so it is only reachable by someone holding
+    a valid approver token issued by that very tenant — who therefore already
+    knows the tenant exists (in practice it is a defensive branch: the token
+    could not have been verified at all if the tenant had not resolved a
+    moment earlier). Contrast `resolve_tenant_database`, which runs before
+    authentication and must stay silent.
     """
     try:
         provider = get_provider(tenant_id)

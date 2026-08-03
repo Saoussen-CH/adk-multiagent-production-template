@@ -21,7 +21,13 @@ anywhere in the system**, and this is enforced rather than documented:
 
 - `POST /api/chat` requires a `tenant_id` in the request body. The backend
   resolves it via `load_tenant_config()` before anything else uses it; an
-  unknown value is a `404`, never a fallback.
+  unknown value is rejected outright, never a fallback. The rejection is a
+  generic `401`, not a `404` naming the id: tenant resolution necessarily runs
+  *before* authentication (tokens live in the tenant's own database), so a
+  `404` there would have let an entirely unauthenticated caller enumerate the
+  platform's tenants by diffing it against the `401` a real tenant returns.
+  See `unknown_tenant_error_for()` in `backend/app/main.py` and
+  `tests/unit/test_tenant_existence_oracle.py`.
 - The resolved `tenant_id` is written into ADK session state once, at session
   creation (`backend/app/agent_client.py`), and every tool reads it back with
   `get_tenant_id(tool_context)`, which raises `MissingTenantError` if absent.
