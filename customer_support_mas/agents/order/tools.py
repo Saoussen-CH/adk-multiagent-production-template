@@ -114,15 +114,30 @@ _CAP_EXCEEDED_RESPONSE = {
 
 
 # The failure counter is deliberately USER-scoped, not session-scoped.
-# google.adk.sessions.state.State.USER_PREFIX == "user:" — state under this
-# prefix persists per user_id across ALL of that user's sessions. A plain
-# (session-scoped) key would reset to zero on every new conversation, and a
-# new conversation costs nothing: POST /api/chat with no session_id, up to
-# RATE_LIMITS["chat"] (300/hour). That made the 3-attempt cap bound nothing.
-# With the prefix, the only way to reset it is to mint a whole new anonymous
+# google.adk.sessions.state.State.USER_PREFIX == "user:" — per the ADK
+# session-state contract, state under this prefix is meant to persist per
+# user_id across ALL of that user's sessions, unlike a plain (session-scoped)
+# key, which resets to zero on every new conversation — and a new
+# conversation costs nothing: POST /api/chat with no session_id, up to
+# RATE_LIMITS["chat"] (300/hour). That made a session-scoped cap bound
+# nothing. IF the prefix's persistence holds on the deployed runtime, the
+# only way to reset this counter becomes minting a whole new anonymous
 # identity via POST /api/auth/anonymous, which RATE_LIMITS["auth"] already
-# caps at 50/hour/IP — so the real bound is <=150 guesses/hour/IP, enforced
-# by infrastructure that already exists.
+# caps at 50/hour/IP — giving a real bound of <=150 guesses/hour/IP with no
+# new infrastructure.
+#
+# CAVEAT (per this repo's own rule of treating Agent Engine behavior as
+# unverified until tested live — see CLAUDE.md's "Reference docs mirror"
+# section): this has NOT been confirmed against the deployed
+# VertexAiSessionService. Its session resource only documents a single
+# `sessionState` field with no separate user-state concept, and
+# `get_user_state()` raises NotImplementedError with "The Vertex AI Agent
+# Engine API does not expose user state independently of a session" — so
+# `user:`-prefixed persistence may or may not actually hold there. Worst
+# case this degrades to the old session-scoped behavior (no regression,
+# just a weaker bound than the comment above describes) — but do not quote
+# "<=150/hour" as a proven guarantee until it's verified with a live
+# two-session check against the deployed engine.
 _ORDER_VERIFICATION_FAILURES_KEY = "user:order_verification_failures"
 
 
