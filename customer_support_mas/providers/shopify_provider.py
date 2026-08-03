@@ -18,6 +18,7 @@ from customer_support_mas.providers.models import Inventory, Invoice, Order, Pay
 _MOCK_ORDERS = {
     "SHOPIFY-ORD-1001": {
         "customer_id": "shopify-customer-1",
+        "customer_email": "shopify-customer-1@example.com",
         "status": "fulfilled",
         "items": [{"product_id": "SHOPIFY-PROD-1", "name": "Mock Shopify Product", "price": 29.99, "qty": 1}],
         "total": 29.99,
@@ -48,10 +49,15 @@ class ShopifyProvider:
         data = _MOCK_ORDERS.get(order_id)
         if data is None:
             return None
-        return Order(order_id=order_id, **data)
+        order_fields = {k: v for k, v in data.items() if k != "customer_email"}
+        return Order(order_id=order_id, **order_fields)
 
     def list_orders_for_customer(self, tenant_id: str, customer_id: str) -> list[Order]:
-        return [Order(order_id=oid, **data) for oid, data in _MOCK_ORDERS.items() if data["customer_id"] == customer_id]
+        return [
+            Order(order_id=oid, **{k: v for k, v in data.items() if k != "customer_email"})
+            for oid, data in _MOCK_ORDERS.items()
+            if data["customer_id"] == customer_id
+        ]
 
     def get_product(self, tenant_id: str, product_id: str) -> Optional[Product]:
         data = _MOCK_PRODUCTS.get(product_id)
@@ -124,12 +130,19 @@ class ShopifyProvider:
         return False, None, "Shopify orders have no separate invoice concept"
 
     def verify_order_owner(self, tenant_id: str, order_id: str, email: str) -> bool:
-        """No account/email concept is modeled in the mock yet (see module
-        docstring — real Shopify OAuth/Admin API sync is future work), so
-        this fails closed unconditionally rather than guessing at a match,
-        consistent with the "must not be able to distinguish which case
-        occurred" constraint on CommerceProvider.verify_order_owner."""
-        return False
+        """Real Shopify order records carry the customer's email natively —
+        this mock reflects that by comparing directly against the mock
+        order's own customer_email field, no cross-reference needed (unlike
+        FirestoreProvider, which has to look up a separate account record;
+        see docs/superpowers/specs/2026-08-03-anonymous-identity-and-order-verification-design.md
+        section 4)."""
+        data = _MOCK_ORDERS.get(order_id)
+        if data is None:
+            return False
+        account_email = data.get("customer_email")
+        if not account_email:
+            return False
+        return account_email.strip().lower() == email.strip().lower()
 
     def execute_refund(
         self,

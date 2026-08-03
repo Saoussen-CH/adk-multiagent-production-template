@@ -84,3 +84,30 @@ def test_get_reviews_for_product_returns_empty_list(monkeypatch):
     provider = ShopifyProvider({"shop_domain": "test.myshopify.com"})
 
     assert provider.get_reviews_for_product("tenant-shopify", "SHOPIFY-PROD-1") == []
+
+
+def test_verify_order_owner_matches_mock_email(monkeypatch):
+    monkeypatch.setenv("SHOPIFY_MOCK", "true")
+    from customer_support_mas.providers.shopify_provider import ShopifyProvider
+
+    provider = ShopifyProvider({"shop_domain": "test.myshopify.com"})
+
+    assert provider.verify_order_owner("tenant-shopify", "SHOPIFY-ORD-1001", "shopify-customer-1@example.com") is True
+
+
+def test_verify_order_owner_rejects_wrong_email(monkeypatch):
+    monkeypatch.setenv("SHOPIFY_MOCK", "true")
+    from customer_support_mas.providers.shopify_provider import ShopifyProvider
+
+    provider = ShopifyProvider({"shop_domain": "test.myshopify.com"})
+
+    assert provider.verify_order_owner("tenant-shopify", "SHOPIFY-ORD-1001", "someone-else@example.com") is False
+
+
+def test_verify_order_owner_unknown_order_returns_false(monkeypatch):
+    monkeypatch.setenv("SHOPIFY_MOCK", "true")
+    from customer_support_mas.providers.shopify_provider import ShopifyProvider
+
+    provider = ShopifyProvider({"shop_domain": "test.myshopify.com"})
+
+    assert provider.verify_order_owner("tenant-shopify", "SHOPIFY-ORD-9999", "anyone@example.com") is False
