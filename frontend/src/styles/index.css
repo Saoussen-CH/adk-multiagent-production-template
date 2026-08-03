@@ -175,23 +175,6 @@ code {
   cursor: not-allowed;
 }
 
-.auth-divider {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin: 24px 0;
-  color: #999;
-  font-size: 14px;
-}
-
-.auth-divider::before,
-.auth-divider::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: #e0e0e0;
-}
-
 .auth-anonymous {
   padding: 14px;
   background: white;

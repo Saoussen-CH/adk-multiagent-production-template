@@ -6,7 +6,16 @@ import ChatInterface from './ChatInterface';
 import RefundApprovals from './RefundApprovals';
 
 export default function MainApp() {
-  const { user, isLoading, showLoginScreen, openLoginScreen, closeLoginScreen, logout } = useAuth();
+  const {
+    user,
+    isLoading,
+    authError,
+    showLoginScreen,
+    openLoginScreen,
+    closeLoginScreen,
+    logout,
+    retryAnonymousSession,
+  } = useAuth();
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -75,10 +84,31 @@ export default function MainApp() {
     );
   }
 
-  if (!user) return null;
-
+  // Checked ahead of the `!user` branch below so "Sign in" is reachable even
+  // when the silent anonymous session failed to start (user is still null)
+  // — the login/register form doesn't depend on an anonymous session ever
+  // having existed.
   if (showLoginScreen) {
     return <AuthScreen onCancel={closeLoginScreen} />;
+  }
+
+  if (!user) {
+    // The silent anonymous-session attempt (startup or post-logout) failed.
+    // Never leave this as a blank page: offer a retry and a manual way to
+    // sign in with an existing account.
+    return (
+      <div className="app-loading">
+        <p>{authError || 'Something went wrong. Please try again.'}</p>
+        <div className="error-actions">
+          <button className="btn-retry" onClick={() => retryAnonymousSession()}>
+            Try again
+          </button>
+          <button className="btn-reload" onClick={openLoginScreen}>
+            Sign in
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (

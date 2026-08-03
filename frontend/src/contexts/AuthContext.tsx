@@ -6,15 +6,19 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   isLoading: boolean;
+  authError: string | null;
   showLoginScreen: boolean;
   openLoginScreen: () => void;
   closeLoginScreen: () => void;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, name: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  retryAnonymousSession: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const ANONYMOUS_SESSION_ERROR = 'Could not connect. Please check your connection and try again.';
 
 async function createAnonymousSession(): Promise<{ user: User; token: string }> {
   const response = await fetch('/api/auth/anonymous', {
@@ -38,12 +42,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [showLoginScreen, setShowLoginScreen] = useState(false);
+
+  // Shared by the startup effect, logout, and the manual retry action: try
+  // to establish a fresh anonymous session, updating state/localStorage on
+  // success or surfacing a visible, recoverable authError on failure. Never
+  // leaves user/token in a state that isn't reflected by either a real user
+  // or an authError — that invariant is what keeps MainApp from ever having
+  // to render a dead end.
+  const establishAnonymousSession = async (): Promise<void> => {
+    try {
+      const { user: anonUser, token: anonToken } = await createAnonymousSession();
+      setUser(anonUser);
+      setToken(anonToken);
+      setAuthError(null);
+      localStorage.setItem('user', JSON.stringify(anonUser));
+      localStorage.setItem('token', anonToken);
+    } catch (error) {
+      console.error('Failed to start anonymous session:', error);
+      setAuthError(ANONYMOUS_SESSION_ERROR);
+    }
+  };
 
   // On load: use a stored session if there is one, otherwise silently start
   // an anonymous one. There is no visible gate — the visitor always lands
   // in a ready chat, whether that's a returning session or a brand-new
-  // anonymous one.
+  // anonymous one. If the silent attempt fails (backend down, network
+  // error), authError is set so MainApp can show a recoverable error state
+  // instead of a blank page.
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
     const storedToken = localStorage.getItem('token');
@@ -61,17 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    createAnonymousSession()
-      .then(({ user: anonUser, token: anonToken }) => {
-        setUser(anonUser);
-        setToken(anonToken);
-        localStorage.setItem('user', JSON.stringify(anonUser));
-        localStorage.setItem('token', anonToken);
-      })
-      .catch((error) => {
-        console.error('Failed to start anonymous session:', error);
-      })
-      .finally(() => setIsLoading(false));
+    establishAnonymousSession().finally(() => setIsLoading(false));
   }, []);
 
   const login = async (email: string, password: string) => {
@@ -91,6 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setUser(loggedInUser);
     setToken(data.token);
+    setAuthError(null);
     localStorage.setItem('user', JSON.stringify(loggedInUser));
     localStorage.setItem('token', data.token);
     setShowLoginScreen(false);
@@ -113,6 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setUser(registeredUser);
     setToken(data.token);
+    setAuthError(null);
     localStorage.setItem('user', JSON.stringify(registeredUser));
     localStorage.setItem('token', data.token);
     setShowLoginScreen(false);
@@ -123,35 +142,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Drop straight back into a fresh anonymous session rather than a
     // visible gate — logging out of a registered account should feel like
-    // "back to guest," not "locked out."
+    // "back to guest," not "locked out." If re-establishing anonymous
+    // session fails, authError is set (by establishAnonymousSession) so
+    // MainApp shows a recoverable error state rather than a blank page.
     setIsLoading(true);
-    try {
-      const { user: anonUser, token: anonToken } = await createAnonymousSession();
-      setUser(anonUser);
-      setToken(anonToken);
-      localStorage.setItem('user', JSON.stringify(anonUser));
-      localStorage.setItem('token', anonToken);
-    } catch (error) {
-      console.error('Failed to start anonymous session after logout:', error);
-      setUser(null);
-      setToken(null);
-      localStorage.removeItem('user');
-      localStorage.removeItem('token');
-    } finally {
-      setIsLoading(false);
-    }
+    setUser(null);
+    setToken(null);
+    localStorage.removeItem('user');
+    localStorage.removeItem('token');
+    await establishAnonymousSession();
+    setIsLoading(false);
+  };
+
+  // Exposed so a visitor stuck on the post-failure error state (see
+  // MainApp) can retry without a full page reload.
+  const retryAnonymousSession = async () => {
+    setIsLoading(true);
+    await establishAnonymousSession();
+    setIsLoading(false);
   };
 
   const value: AuthContextType = {
     user,
     token,
     isLoading,
+    authError,
     showLoginScreen,
     openLoginScreen: () => setShowLoginScreen(true),
     closeLoginScreen: () => setShowLoginScreen(false),
     login,
     register,
     logout,
+    retryAnonymousSession,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
