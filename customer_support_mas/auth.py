@@ -31,61 +31,83 @@ def audit_log(
         logger.warning(f"[AUDIT] DENIED: {user_id} -> {action} on {resource_type}/{resource_id} - {details}")
 
 
-def requires_order_ownership(func: Callable) -> Callable:
+def requires_order_ownership(func: Optional[Callable] = None, *, allow_verified_grant: bool = True) -> Callable:
     """Verifies the user owns the order before executing the tool.
 
     Fetches the order once via the tenant's provider, injects it as
     `_order_data` (a dict, same shape tools already expect — see
     dataclasses.asdict below) so downstream tool code doesn't change.
+
+    Usable bare (`@requires_order_ownership`) or with arguments
+    (`@requires_order_ownership(allow_verified_grant=False)`).
+
+    allow_verified_grant: whether a conversation-scoped order-verification
+    grant (tool_context.state["verified_order_ids"], from
+    agents/order/tools.py's verify_order_access) is accepted as an alternate
+    path to the normal order.customer_id == user_id check. Defaults to True
+    for order-lookup tools — shipping/tracking/order status is exactly what
+    Part B of the anonymous-identity plan is for.
+
+    Billing tools (invoice / payment lookups) pass False. An order number
+    plus an email is a deliberately weaker bar than an account login, and
+    check_payment_status returns Payment.as_response_dict() — payment_method,
+    transaction_id, customer_id. That is beyond what the design spec's §4
+    reasoned about, and it matches the precedent already set by refund tools,
+    which never accept this grant at all.
     """
 
-    @wraps(func)
-    def wrapper(*args, **kwargs) -> dict:
-        tool_context = kwargs.get("tool_context")
-        order_id = kwargs.get("order_id")
+    def decorator(fn: Callable) -> Callable:
+        @wraps(fn)
+        def wrapper(*args, **kwargs) -> dict:
+            tool_context = kwargs.get("tool_context")
+            order_id = kwargs.get("order_id")
 
-        if tool_context is None:
-            for arg in args:
-                if isinstance(arg, ToolContext):
-                    tool_context = arg
-                    break
+            if tool_context is None:
+                for arg in args:
+                    if isinstance(arg, ToolContext):
+                        tool_context = arg
+                        break
 
-        if order_id is None and args:
-            for arg in args:
-                if isinstance(arg, str) and arg.startswith("ORD-"):
-                    order_id = arg
-                    break
+            if order_id is None and args:
+                for arg in args:
+                    if isinstance(arg, str) and arg.startswith("ORD-"):
+                        order_id = arg
+                        break
 
-        if tool_context is None:
-            logger.error(f"[AUTH] No tool_context provided to {func.__name__}")
-            return {"status": "error", "message": "Internal error: missing context"}
+            if tool_context is None:
+                logger.error(f"[AUTH] No tool_context provided to {fn.__name__}")
+                return {"status": "error", "message": "Internal error: missing context"}
 
-        user_id = tool_context.user_id
-        tenant_id = get_tenant_id(tool_context)
-        action = func.__name__
+            user_id = tool_context.user_id
+            tenant_id = get_tenant_id(tool_context)
+            action = fn.__name__
 
-        provider = get_provider(tenant_id)
-        order = provider.get_order(tenant_id, order_id)
+            provider = get_provider(tenant_id)
+            order = provider.get_order(tenant_id, order_id)
 
-        if order is None:
-            audit_log(user_id, action, "order", order_id, False, "Order not found")
-            return {"status": "error", "message": f"Order {order_id} not found"}
+            if order is None:
+                audit_log(user_id, action, "order", order_id, False, "Order not found")
+                return {"status": "error", "message": f"Order {order_id} not found"}
 
-        if order.customer_id != user_id:
-            verified_order_ids = tool_context.state.get("verified_order_ids", [])
-            if order_id not in verified_order_ids:
-                audit_log(user_id, action, "order", order_id, False, f"Belongs to {order.customer_id}")
-                return {"status": "error", "message": f"You don't have permission to access order {order_id}"}
-            audit_log(user_id, action, "order", order_id, True, "via conversation-scoped order verification")
-        else:
-            audit_log(user_id, action, "order", order_id, True)
+            if order.customer_id != user_id:
+                verified_order_ids = tool_context.state.get("verified_order_ids", []) if allow_verified_grant else []
+                if order_id not in verified_order_ids:
+                    audit_log(user_id, action, "order", order_id, False, f"Belongs to {order.customer_id}")
+                    return {"status": "error", "message": f"You don't have permission to access order {order_id}"}
+                audit_log(user_id, action, "order", order_id, True, "via conversation-scoped order verification")
+            else:
+                audit_log(user_id, action, "order", order_id, True)
 
-        kwargs["_order_data"] = _order_to_dict(order)
-        kwargs["_order_id"] = order_id
+            kwargs["_order_data"] = _order_to_dict(order)
+            kwargs["_order_id"] = order_id
 
-        return func(*args, **kwargs)
+            return fn(*args, **kwargs)
 
-    return wrapper
+        return wrapper
+
+    if func is not None:
+        return decorator(func)
+    return decorator
 
 
 def requires_invoice_ownership(func: Callable) -> Callable:

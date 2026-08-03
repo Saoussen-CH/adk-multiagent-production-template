@@ -50,7 +50,7 @@ def get_invoice(invoice_id: str, tool_context: ToolContext, _invoice_data: dict 
 
 
 @tool_error_handler
-@requires_order_ownership
+@requires_order_ownership(allow_verified_grant=False)
 def get_invoice_by_order_id(order_id: str, tool_context: ToolContext, _order_data: dict = None, **kwargs) -> dict:
     """Get invoice by order ID. Only accessible if the order belongs to you."""
     is_valid, error_msg = validate_order_id(order_id)
@@ -95,7 +95,7 @@ def get_my_invoices(tool_context: ToolContext, _user_id: str = None, **kwargs) -
 
 
 @tool_error_handler
-@requires_order_ownership
+@requires_order_ownership(allow_verified_grant=False)
 def check_payment_status(order_id: str, tool_context: ToolContext, _order_data: dict = None, **kwargs) -> dict:
     """Check payment status for an order. Only accessible if the order belongs to you."""
     tenant_id = get_tenant_id(tool_context)
