@@ -104,6 +104,34 @@ _GENERIC_VERIFICATION_FAILURE = {
     "message": "Could not verify those order details. Please check the order number and email and try again.",
 }
 
+_CAP_EXCEEDED_RESPONSE = {
+    "status": "error",
+    "message": (
+        "Too many failed attempts to verify this order. Please log in to your account, "
+        "or contact support through another channel for help with this order."
+    ),
+}
+
+
+def _record_verification_failure(tool_context: ToolContext, failures: int) -> dict:
+    """Increments the failure counter and returns the response to show — the
+    generic miss message, or the cap-exceeded message once the increment
+    crosses the threshold.
+
+    Called from EVERY failure path (wrong details, invalid input, provider
+    exception) so all three are genuinely indistinguishable to the caller and
+    all three count against the cap. Routing an exception anywhere else (e.g.
+    letting it reach tool_error_handler's outer catch) would leak an oracle:
+    a provider that only touches `email` when the order exists returns a
+    different message for a real order than for a made-up one, and costs the
+    guesser nothing against the 3-attempt cap.
+    """
+    new_failures = failures + 1
+    tool_context.state["order_verification_failures"] = new_failures
+    if new_failures >= _MAX_ORDER_VERIFICATION_ATTEMPTS:
+        return dict(_CAP_EXCEEDED_RESPONSE)
+    return dict(_GENERIC_VERIFICATION_FAILURE)
+
 
 @tool_error_handler
 def verify_order_access(order_id: str, email: str, tool_context: ToolContext) -> dict:
@@ -131,28 +159,26 @@ def verify_order_access(order_id: str, email: str, tool_context: ToolContext) ->
 
     failures = tool_context.state.get("order_verification_failures", 0)
     if failures >= _MAX_ORDER_VERIFICATION_ATTEMPTS:
-        return {
-            "status": "error",
-            "message": (
-                "Too many failed attempts to verify this order. Please log in to your account, "
-                "or contact support through another channel for help with this order."
-            ),
-        }
+        return dict(_CAP_EXCEEDED_RESPONSE)
+
+    # Validated here rather than inside the provider: a provider that only
+    # reaches `email.strip()` on the branch where the order exists turns a
+    # malformed email into an order-existence oracle.
+    if not isinstance(email, str) or "@" not in email:
+        return _record_verification_failure(tool_context, failures)
 
     provider = get_provider(tenant_id)
-    verified = provider.verify_order_owner(tenant_id, order_id, email)
+    try:
+        verified = provider.verify_order_owner(tenant_id, order_id, email)
+    except Exception:
+        # Deliberately caught HERE, not by the outer tool_error_handler: that
+        # would return a different message than a normal miss and would not
+        # count against the cap.
+        logger.exception("verify_order_owner raised for order %s", order_id)
+        return _record_verification_failure(tool_context, failures)
 
     if not verified:
-        tool_context.state["order_verification_failures"] = failures + 1
-        if tool_context.state["order_verification_failures"] >= _MAX_ORDER_VERIFICATION_ATTEMPTS:
-            return {
-                "status": "error",
-                "message": (
-                    "Too many failed attempts to verify this order. Please log in to your account, "
-                    "or contact support through another channel for help with this order."
-                ),
-            }
-        return dict(_GENERIC_VERIFICATION_FAILURE)
+        return _record_verification_failure(tool_context, failures)
 
     verified_order_ids = tool_context.state.get("verified_order_ids", [])
     if order_id not in verified_order_ids:
