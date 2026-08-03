@@ -23,6 +23,28 @@ const apiClient = axios.create({
   timeout: 30000,
 });
 
+// Anonymous identity is a real bearer token now, and tokens expire (30 days,
+// see backend/app/database.py's create_token; verify_token also deletes
+// expired ones server-side). Without this, a returning anonymous visitor past
+// that point is stuck forever: every call 401s, the stale user/token stay in
+// localStorage, and nothing ever calls /api/auth/anonymous again — the only
+// escape would be manually clearing browser storage.
+//
+// The in-flight request that got the 401 still fails and shows its existing
+// error toast once; this makes the NEXT action work. AuthContext listens for
+// 'auth:unauthorized' and re-establishes a fresh anonymous session.
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      localStorage.removeItem('user');
+      localStorage.removeItem('token');
+      window.dispatchEvent(new Event('auth:unauthorized'));
+    }
+    return Promise.reject(error);
+  }
+);
+
 /**
  * Sleep for specified milliseconds
  */

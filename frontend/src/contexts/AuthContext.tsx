@@ -91,6 +91,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     establishAnonymousSession().finally(() => setIsLoading(false));
   }, []);
 
+  // Anonymous identity is a real bearer token now, and tokens expire (30 days,
+  // backend/app/database.py). api.ts's response interceptor clears the stale
+  // credentials and fires this event on any 401; without recovering here, a
+  // returning visitor past expiry would be stuck in a chat that fails forever.
+  // /api/auth/anonymous is called with fetch(), not apiClient, so a failure to
+  // re-establish cannot re-trigger this handler — no loop.
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setUser(null);
+      setToken(null);
+      establishAnonymousSession();
+    };
+    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
+  }, []);
+
   const login = async (email: string, password: string) => {
     const response = await fetch('/api/auth/login', {
       method: 'POST',
