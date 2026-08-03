@@ -108,6 +108,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string) => {
+    // A session created under the previous (anonymous) identity does not
+    // belong to the account being signed into. MainApp's useEffect([user])
+    // restores whatever currentSessionId is in localStorage the moment `user`
+    // changes, with no check on whose session it was — so leaving it behind
+    // makes the next message/history load hit backend/app/main.py's
+    // 403 "Session does not belong to user". logout() already clears it;
+    // login and register must too, for the same reason.
+    localStorage.removeItem('currentSessionId');
+
     const response = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -131,6 +140,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const register = async (email: string, name: string, password: string) => {
+    // Same stale-session hazard as login() above.
+    localStorage.removeItem('currentSessionId');
+
     const response = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
