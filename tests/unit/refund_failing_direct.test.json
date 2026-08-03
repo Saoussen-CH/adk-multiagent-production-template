@@ -6,22 +6,38 @@
       "conversation": [
         {
           "user_content": {
-            "parts": [{"text": "I want a refund for order ORD-99999"}],
+            "parts": [
+              {
+                "text": "I want a refund for order ORD-99999"
+              }
+            ],
             "role": "user"
           },
           "final_response": {
-            "parts": [{"text": "Order ORD-99999 not found"}],
+            "parts": [
+              {
+                "text": "Order ORD-99999 not found"
+              }
+            ],
             "role": "model"
           },
           "intermediate_data": {
             "tool_uses": [
-              {"name": "check_if_refundable", "args": {"order_id": "ORD-99999"}}
+              {
+                "name": "check_if_refundable",
+                "args": {
+                  "order_id": "ORD-99999"
+                }
+              }
             ]
           }
         }
       ],
       "session_input": {
-        "user_id": "demo-user-001"
+        "user_id": "demo-user-001",
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       }
     },
     {
@@ -29,22 +45,38 @@
       "conversation": [
         {
           "user_content": {
-            "parts": [{"text": "I want a refund for order ORD-11111"}],
+            "parts": [
+              {
+                "text": "I want a refund for order ORD-11111"
+              }
+            ],
             "role": "user"
           },
           "final_response": {
-            "parts": [{"text": "Order ORD-11111 is past the 30-day return window and is not eligible for refund"}],
+            "parts": [
+              {
+                "text": "Order ORD-11111 is past the 30-day return window and is not eligible for refund"
+              }
+            ],
             "role": "model"
           },
           "intermediate_data": {
             "tool_uses": [
-              {"name": "check_if_refundable", "args": {"order_id": "ORD-11111"}}
+              {
+                "name": "check_if_refundable",
+                "args": {
+                  "order_id": "ORD-11111"
+                }
+              }
             ]
           }
         }
       ],
       "session_input": {
-        "user_id": "demo-user-001"
+        "user_id": "demo-user-001",
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       }
     },
     {
@@ -52,22 +84,38 @@
       "conversation": [
         {
           "user_content": {
-            "parts": [{"text": "I want a refund for order ORD-12345"}],
+            "parts": [
+              {
+                "text": "I want a refund for order ORD-12345"
+              }
+            ],
             "role": "user"
           },
           "final_response": {
-            "parts": [{"text": "Order ORD-12345 is still in transit and cannot be refunded yet"}],
+            "parts": [
+              {
+                "text": "Order ORD-12345 is still in transit and cannot be refunded yet"
+              }
+            ],
             "role": "model"
           },
           "intermediate_data": {
             "tool_uses": [
-              {"name": "check_if_refundable", "args": {"order_id": "ORD-12345"}}
+              {
+                "name": "check_if_refundable",
+                "args": {
+                  "order_id": "ORD-12345"
+                }
+              }
             ]
           }
         }
       ],
       "session_input": {
-        "user_id": "demo-user-001"
+        "user_id": "demo-user-001",
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       }
     },
     {
@@ -75,22 +123,38 @@
       "conversation": [
         {
           "user_content": {
-            "parts": [{"text": "I want a refund for order ORD-22222"}],
+            "parts": [
+              {
+                "text": "I want a refund for order ORD-22222"
+              }
+            ],
             "role": "user"
           },
           "final_response": {
-            "parts": [{"text": "You don't have permission to access order ORD-22222"}],
+            "parts": [
+              {
+                "text": "You don't have permission to access order ORD-22222"
+              }
+            ],
             "role": "model"
           },
           "intermediate_data": {
             "tool_uses": [
-              {"name": "check_if_refundable", "args": {"order_id": "ORD-22222"}}
+              {
+                "name": "check_if_refundable",
+                "args": {
+                  "order_id": "ORD-22222"
+                }
+              }
             ]
           }
         }
       ],
       "session_input": {
-        "user_id": "demo-user-001"
+        "user_id": "demo-user-001",
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       }
     }
   ]

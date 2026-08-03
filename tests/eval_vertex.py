@@ -61,6 +61,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_DATASET = "tests/post_deploy/datasets/post_deploy_cases.json"
 DEFAULT_PROFILE = "standard"
 
+# Every ADK session must be created with a tenant_id in its state — there is
+# no default/implicit tenant anywhere in this system, and every tool resolves
+# its CommerceProvider through get_tenant_id(tool_context), which hard-raises
+# MissingTenantError when it is absent. Post-deploy evals run against the
+# real deployed Agent Engine and the real seeded Firestore data, so this is
+# the tenant seeded by customer_support_mas/database/fixtures.py. Override
+# with EVAL_TENANT_ID when evaluating a different tenant's deployment.
+EVAL_TENANT_ID = os.getenv("EVAL_TENANT_ID", "acme-electronics")
+
 
 def init_vertex_ai() -> tuple[str, str]:
     """Initialize Vertex AI SDK and return (project_id, location)."""
@@ -104,7 +113,7 @@ def load_dataset(dataset_path: str) -> pd.DataFrame:
 
     # Build DataFrame with prompt and session_inputs columns.
     # Use demo-user-001 which owns orders/invoices in the seeded Firestore data.
-    session_inputs = types.evals.SessionInput(user_id="demo-user-001", state={})
+    session_inputs = types.evals.SessionInput(user_id="demo-user-001", state={"tenant_id": EVAL_TENANT_ID})
     df = pd.DataFrame(cases)
 
     # Add session_inputs column (required for agent inference traces)
@@ -180,7 +189,9 @@ def run_custom_inference(
 
         for attempt in range(1, max_retries + 1):
             try:
-                session = await agent_engine.async_create_session(user_id="demo-user-001", state={})
+                session = await agent_engine.async_create_session(
+                    user_id="demo-user-001", state={"tenant_id": EVAL_TENANT_ID}
+                )
                 session_id = session["id"]
 
                 events = []

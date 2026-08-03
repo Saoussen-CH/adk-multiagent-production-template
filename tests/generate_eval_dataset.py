@@ -296,6 +296,15 @@ def apply_mocks():
 # CORE: Run a single eval case and capture events
 # =============================================================================
 
+
+# Every ADK session must be created with a tenant_id in its state — there is
+# no default/implicit tenant in this system, and every tool resolves its
+# CommerceProvider via get_tenant_id(tool_context), which hard-raises
+# MissingTenantError when it is missing. Both the session the agent actually
+# runs in and the SessionInput recorded into the generated dataset carry it,
+# so a regenerated dataset replays identically to a hand-checked one.
+EVAL_TENANT_ID = os.getenv("EVAL_TENANT_ID", "acme-electronics")
+
 MAX_RETRIES = 4
 RETRY_BASE_DELAY = 15  # seconds
 
@@ -320,6 +329,7 @@ async def run_eval_case(agent, case: dict, default_user_id: str, app_name: str):
             session = await runner.session_service.create_session(
                 app_name=app_name,
                 user_id=user_id,
+                state={"tenant_id": EVAL_TENANT_ID},
             )
 
             # Send the prompt and collect all events
@@ -481,7 +491,7 @@ async def generate_dataset(agent_key: str, delay: float = 2.0) -> str:
         eval_case = EvalCase(
             eval_id=eval_id,
             conversation=[invocation],
-            session_input=SessionInput(app_name=app_name, user_id=user_id),
+            session_input=SessionInput(app_name=app_name, user_id=user_id, state={"tenant_id": EVAL_TENANT_ID}),
         )
         eval_cases.append(eval_case)
 

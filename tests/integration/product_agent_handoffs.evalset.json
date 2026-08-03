@@ -244,7 +244,10 @@
       ],
       "session_input": {
         "app_name": "root_agent",
-        "user_id": "demo-user-001"
+        "user_id": "demo-user-001",
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 1770491797.0280051
     }

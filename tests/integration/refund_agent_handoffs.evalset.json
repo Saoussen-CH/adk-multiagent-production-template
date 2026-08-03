@@ -142,7 +142,10 @@
       ],
       "session_input": {
         "app_name": "root_agent",
-        "user_id": "demo-user-001"
+        "user_id": "demo-user-001",
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 1770493714.2545474
     },
@@ -217,7 +220,10 @@
       ],
       "session_input": {
         "app_name": "root_agent",
-        "user_id": "demo-user-001"
+        "user_id": "demo-user-001",
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 1770493737.1590133
     },
@@ -345,7 +351,10 @@
       ],
       "session_input": {
         "app_name": "root_agent",
-        "user_id": "demo-user-001"
+        "user_id": "demo-user-001",
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 1770493781.6966052
     }

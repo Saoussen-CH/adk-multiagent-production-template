@@ -91,7 +91,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -179,7 +181,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -251,7 +255,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -323,7 +329,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -417,7 +425,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -505,7 +515,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -578,7 +590,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -656,7 +670,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -736,7 +752,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -865,7 +883,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -962,7 +982,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-001",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}
@@ -1053,7 +1075,9 @@
       "session_input": {
         "app_name": "eval_billing",
         "user_id": "demo-user-002",
-        "state": {}
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
       },
       "creation_timestamp": 0.0,
       "final_session_state": {}

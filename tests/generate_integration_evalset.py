@@ -359,6 +359,15 @@ def apply_mocks():
 # CORE: Run a multi-turn eval case and capture events per turn
 # =============================================================================
 
+
+# Every ADK session must be created with a tenant_id in its state — there is
+# no default/implicit tenant in this system, and every tool resolves its
+# CommerceProvider via get_tenant_id(tool_context), which hard-raises
+# MissingTenantError when it is missing. Both the session the agent actually
+# runs in and the SessionInput recorded into the generated dataset carry it,
+# so a regenerated dataset replays identically to a hand-checked one.
+EVAL_TENANT_ID = os.getenv("EVAL_TENANT_ID", "acme-electronics")
+
 MAX_RETRIES = 4
 RETRY_BASE_DELAY = 15  # seconds
 
@@ -463,6 +472,7 @@ async def run_multi_turn_case(agent, case: dict, app_name: str, turn_delay: floa
     session = await runner.session_service.create_session(
         app_name=app_name,
         user_id=user_id,
+        state={"tenant_id": EVAL_TENANT_ID},
     )
 
     invocations = []
@@ -565,7 +575,7 @@ async def generate_suite(suite_key: str, delay: float = 5.0, turn_delay: float =
         eval_case = EvalCase(
             eval_id=eval_id,
             conversation=invocations,
-            session_input=SessionInput(app_name=app_name, user_id=user_id),
+            session_input=SessionInput(app_name=app_name, user_id=user_id, state={"tenant_id": EVAL_TENANT_ID}),
             creation_timestamp=time.time(),
         )
         eval_cases.append(eval_case)
