@@ -100,6 +100,26 @@ def test_fourth_attempt_does_not_retry_even_with_correct_details(tool_context_wi
     assert call_count["n"] == calls_before_fourth  # provider was not called a 4th time
 
 
+def test_verify_order_access_is_registered_on_the_order_agent():
+    """A tool the order agent doesn't carry is dead code: no guest visitor can
+    ever reach the order+email step-up path at runtime. The instruction text
+    must advertise it too — ADK only calls tools the model knows to ask for."""
+    import importlib
+
+    from customer_support_mas.agents.order import agent as order_agent_module
+
+    importlib.reload(order_agent_module)
+    # Plain functions carry __name__; ADK tool objects (PreloadMemoryTool,
+    # McpToolset) carry .name instead.
+    tool_names = [
+        getattr(t, "__name__", None) or getattr(t, "name", type(t).__name__)
+        for t in order_agent_module.order_agent.tools
+    ]
+
+    assert "verify_order_access" in tool_names, tool_names
+    assert "verify_order_access" in order_agent_module.order_agent.instruction
+
+
 def test_failure_counter_is_user_scoped_not_session_scoped(tool_context_with_tenant, monkeypatch):
     """The cap must survive a new conversation. ADK persists state written
     under State.USER_PREFIX per user_id across ALL of that user's sessions;
