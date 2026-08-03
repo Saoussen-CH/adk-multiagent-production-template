@@ -233,13 +233,20 @@ def test_a_real_token_still_works_and_a_real_logout_still_revokes():
 # =============================================================================
 # (e) RESIDUAL, KNOWN AND DELIBERATE
 #
-# Two endpoints are *designed* to serve callers who have authenticated
-# nothing, so a known tenant necessarily answers 200 where an unknown one
-# cannot. No status code can hide that; only changing the auth model could.
-# The tests below assert the residual explicitly so it is documented in
-# executable form rather than only in a report — if someone closes one of
-# these, this test fails and should be deleted along with the endpoint's
-# comment.
+# One endpoint is *designed* to serve callers who have authenticated nothing,
+# so a known tenant necessarily answers 200 where an unknown one cannot. No
+# status code can hide that; only changing the auth model could. The test
+# below asserts the residual explicitly so it is documented in executable
+# form rather than only in a report — if someone closes it, this test fails
+# and should be deleted along with the endpoint's comment.
+#
+# The *other* residual this section used to document — anonymous /api/chat
+# accepting a bare X-User-Id as an unverified claim, so a known tenant
+# answered 200 to it while an unknown one answered 401 — is now closed: chat
+# no longer authenticates from that header at all, so a bare X-User-Id (with
+# no Authorization header) is just another no-credential request and
+# answers identically for any tenant. See
+# test_no_client_asserted_identity.py for the direct 401 assertion.
 # =============================================================================
 
 
@@ -259,20 +266,20 @@ def test_residual_registration_still_distinguishes_by_succeeding():
     assert UNKNOWN_TENANT not in unknown.text
 
 
-def test_residual_anonymous_chat_still_distinguishes_by_succeeding():
-    """`X-User-Id` is an unverified claim rather than a credential: the
-    backend never checks the id was issued by this tenant's
-    /api/auth/anonymous. So supplying any value still yields 200 for a real
-    tenant and 401 for an unknown one. Closing this means making anonymous
-    ids real credentials — an auth-contract change (frontend localStorage,
-    tests/smoke/test_smoke.py) deliberately not smuggled into this fix."""
+def test_bare_x_user_id_no_longer_distinguishes_known_from_unknown_tenant():
+    """This is the residual the section header above used to describe as
+    permanent: a bare X-User-Id used to authenticate chat unconditionally, so
+    a known tenant answered 200 to it while an unknown one answered 401 —
+    itself a tenant-existence oracle. Task 2 closes it: the header is no
+    longer trusted at all, so both answers are now the identical 401 no
+    credential gets."""
     anon = {"X-User-Id": "anon-whatever-i-like"}
 
     known = client.post("/api/chat", headers=anon, json={"message": "hi", "tenant_id": KNOWN_TENANT})
     unknown = client.post("/api/chat", headers=anon, json={"message": "hi", "tenant_id": UNKNOWN_TENANT})
 
-    assert known.status_code == 200
-    assert unknown.status_code == 401
+    assert known.status_code == 401
+    assert (unknown.status_code, unknown.json()) == (known.status_code, known.json())
 
 
 if __name__ == "__main__":

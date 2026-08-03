@@ -275,10 +275,13 @@ def resolve_tenant_database(tenant_id: str, unknown_tenant_error: Optional[Excep
 def authenticate_bearer(tenant_db: Database, authorization: Optional[str]) -> Optional[str]:
     """Verify an Authorization header against ONE tenant's token store.
 
-    Returns None when no header was supplied (the caller may still be an
-    anonymous X-User-Id user). Raises 401 for a malformed header or a token
-    that this tenant's database does not know — including a token that is
-    perfectly valid for a *different* tenant, which is the point.
+    Returns None when no header was supplied at all — callers of this
+    function are responsible for treating that as unauthenticated; there is
+    no anonymous-without-a-token identity any more (Task 1 gives anonymous
+    users a real bearer token; Task 2 removed the old X-User-Id fallback).
+    Raises 401 for a malformed header or a token that this tenant's database
+    does not know — including a token that is perfectly valid for a
+    *different* tenant, which is the point.
     """
     if not authorization:
         return None
@@ -599,15 +602,14 @@ async def logout(
 async def chat(
     request: ChatRequest,
     authorization: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None),
     _rate_check: bool = Depends(RateLimitDependency("chat")),
 ):
     """
     Send a message to the customer support agent.
 
-    Supports both:
-    - Authenticated users (via Authorization: Bearer token header)
-    - Anonymous users (via X-User-Id header with anon-* user_id)
+    Every caller — anonymous or registered — authenticates via
+    Authorization: Bearer <token>. Anonymous sessions get a real token from
+    POST /api/auth/anonymous (Task 1); there is no unauthenticated path.
 
     Unlike every other authenticated endpoint here, this one does NOT use the
     `get_current_user` dependency: its `tenant_id` arrives in the request
@@ -619,8 +621,7 @@ async def chat(
 
     Args:
         request: ChatRequest with message, optional session_id, and required tenant_id
-        authorization: Bearer token header (if authenticated)
-        x_user_id: Extracted from X-User-Id header (if anonymous)
+        authorization: Bearer token header (required)
 
     Returns:
         ChatResponse with agent response, user_id, and session_id
@@ -648,37 +649,24 @@ async def chat(
         # authenticate_bearer raises).
         tenant_db = resolve_tenant_database(
             request.tenant_id,
-            unknown_tenant_error=unknown_tenant_error_for(
-                authorization,
-                "Authentication required. Use Authorization header or X-User-Id for anonymous users.",
-            ),
+            unknown_tenant_error=unknown_tenant_error_for(authorization, "Authentication required"),
         )
 
-        # Determine user_id (auth takes precedence over anonymous)
+        # Determine user_id — every caller, anonymous or registered, now
+        # authenticates via a real bearer token (Task 1 gives anonymous
+        # users one too). There is no more X-User-Id fallback: a
+        # client-asserted identity with no proof was exactly the bug this
+        # task closes.
         user_id = authenticate_bearer(tenant_db, authorization)
-        actual_user_id = user_id or x_user_id
 
-        if not actual_user_id:
-            # Keep this detail string in sync with the one handed to
-            # resolve_tenant_database above: an unknown tenant answers with
-            # this exact response, and any drift between the two reopens the
+        if not user_id:
+            # Keep this detail string in sync with resolve_tenant_database's
+            # unknown_tenant_error_for call below it — an unknown tenant
+            # answers with this exact response, and any drift reopens the
             # tenant-existence oracle.
-            #
-            # Residual, deliberately not closed here: `x_user_id` is an
-            # unverified claim, not a credential — the backend never checks
-            # that the anonymous id was issued by this tenant's
-            # /api/auth/anonymous. So a caller who supplies any X-User-Id
-            # still sees 200 for a real tenant vs 401 for an unknown one.
-            # Closing that means making the anonymous id a real credential
-            # (verify it against the tenant's users collection), which changes
-            # the anonymous auth contract for the frontend's localStorage flow
-            # and for tests/smoke/test_smoke.py — a separate change, not one
-            # to smuggle in here. Pinned down, with that reasoning, by
-            # tests/unit/test_tenant_existence_oracle.py's residual section.
-            raise HTTPException(
-                status_code=401,
-                detail="Authentication required. Use Authorization header or X-User-Id for anonymous users.",
-            )
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        actual_user_id = user_id
 
         # Per-tenant rate limit — an additional ceiling on top of the
         # per-user RateLimitDependency("chat") check above, not a
@@ -809,21 +797,12 @@ async def chat(
 # =============================================================================
 # SESSION MANAGEMENT ENDPOINTS
 #
-# All four take `tenant_id` as a REQUIRED query parameter. They have no
-# request body to carry it in, and it cannot be optional: sessions live in
+# All four take `tenant_id` as a REQUIRED query parameter — sessions live in
 # their tenant's own database, and `get_current_user` needs it to know which
 # token store to verify the caller's bearer token against. A missing
-# tenant_id is a 422, never an implicit default.
-#
-# Cross-tenant access therefore fails twice over: the token doesn't verify
-# against the wrong tenant's store (401), and even an anonymous X-User-Id
-# caller finds no session there (404).
-#
-# Each body below calls `resolve_tenant_database(tenant_id)` with its default
-# unknown-tenant error — `401 Authentication required` — which is verbatim
-# the 401 the same endpoint raises three lines later for a known tenant with
-# no credentials. That equality is the whole point; tests/unit/
-# test_tenant_existence_oracle.py compares the two responses byte for byte.
+# tenant_id is a 422, never an implicit default. Every caller must present a
+# valid token; there is no anonymous-without-a-token path (see Task 1/2 of
+# docs/superpowers/plans/2026-08-03-anonymous-identity-and-order-verification.md).
 # =============================================================================
 
 
@@ -831,24 +810,22 @@ async def chat(
 async def list_sessions(
     tenant_id: str,
     user_id: Optional[str] = Depends(get_current_user),
-    x_user_id: Optional[str] = Header(None),
     _rate_check: bool = Depends(RateLimitDependency("sessions")),
 ):
     """Get the current user's sessions with one merchant."""
     try:
         tenant_db = resolve_tenant_database(tenant_id)
-        actual_user_id = user_id or x_user_id
 
-        if not actual_user_id:
+        if not user_id:
             raise HTTPException(status_code=401, detail="Authentication required")
 
-        sessions = tenant_db.get_user_sessions(actual_user_id)
+        sessions = tenant_db.get_user_sessions(user_id)
 
         from .models import SessionInfo
 
         session_list = [SessionInfo(**session) for session in sessions]
 
-        return SessionListResponse(user_id=actual_user_id, sessions=session_list)
+        return SessionListResponse(user_id=user_id, sessions=session_list)
 
     except HTTPException:
         raise
@@ -863,22 +840,20 @@ async def rename_session(
     request: RenameSessionRequest,
     tenant_id: str,
     user_id: Optional[str] = Depends(get_current_user),
-    x_user_id: Optional[str] = Header(None),
     _rate_check: bool = Depends(RateLimitDependency("sessions")),
 ):
     """Rename a session."""
     try:
         tenant_db = resolve_tenant_database(tenant_id)
-        actual_user_id = user_id or x_user_id
 
-        if not actual_user_id:
+        if not user_id:
             raise HTTPException(status_code=401, detail="Authentication required")
 
         # Verify session belongs to user (and, via tenant_db, to this tenant)
         session = tenant_db.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        if session["user_id"] != actual_user_id:
+        if session["user_id"] != user_id:
             raise HTTPException(status_code=403, detail="Session does not belong to user")
 
         tenant_db.rename_session(session_id, request.session_name)
@@ -897,22 +872,20 @@ async def delete_session(
     session_id: str,
     tenant_id: str,
     user_id: Optional[str] = Depends(get_current_user),
-    x_user_id: Optional[str] = Header(None),
     _rate_check: bool = Depends(RateLimitDependency("sessions")),
 ):
     """Delete a session."""
     try:
         tenant_db = resolve_tenant_database(tenant_id)
-        actual_user_id = user_id or x_user_id
 
-        if not actual_user_id:
+        if not user_id:
             raise HTTPException(status_code=401, detail="Authentication required")
 
         # Verify session belongs to user (and, via tenant_db, to this tenant)
         session = tenant_db.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        if session["user_id"] != actual_user_id:
+        if session["user_id"] != user_id:
             raise HTTPException(status_code=403, detail="Session does not belong to user")
 
         tenant_db.delete_session(session_id)
@@ -931,22 +904,20 @@ async def get_session_messages(
     session_id: str,
     tenant_id: str,
     user_id: Optional[str] = Depends(get_current_user),
-    x_user_id: Optional[str] = Header(None),
     _rate_check: bool = Depends(RateLimitDependency("sessions")),
 ):
     """Get message history for a session."""
     try:
         tenant_db = resolve_tenant_database(tenant_id)
-        actual_user_id = user_id or x_user_id
 
-        if not actual_user_id:
+        if not user_id:
             raise HTTPException(status_code=401, detail="Authentication required")
 
         # Verify session belongs to user (and, via tenant_db, to this tenant)
         session = tenant_db.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        if session["user_id"] != actual_user_id:
+        if session["user_id"] != user_id:
             raise HTTPException(status_code=403, detail="Session does not belong to user")
 
         # Get messages

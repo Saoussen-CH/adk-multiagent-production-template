@@ -72,12 +72,24 @@ def _wire_account_stores(wire_backend_account_stores):
     return wire_backend_account_stores
 
 
-def _chat(tenant_id, message="hello", user_id="anon-smoke"):
+def _chat(tenant_id, message="hello", token=None):
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     return client.post(
         "/api/chat",
-        headers={"X-User-Id": user_id},
+        headers=headers,
         json={"message": message, "tenant_id": tenant_id},
     )
+
+
+def _authed_token(mock_db, tenant_id="test-tenant"):
+    """Mint a real anonymous token in `mock_db` for `tenant_id`, the way
+    /api/auth/anonymous does — X-User-Id is no longer a trusted credential,
+    so any test that needs an authenticated caller now needs one of these."""
+    from backend.app.database import Database
+
+    db = Database(project_id="test-project", database_id=f"{tenant_id}-db", tenant_id=tenant_id, client=mock_db)
+    _, token = db.create_anonymous_user()
+    return token
 
 
 def test_unknown_tenant_is_rejected_before_the_agent_is_ever_queried(monkeypatch):
@@ -159,7 +171,8 @@ def test_known_tenant_still_reaches_the_agent(monkeypatch, mock_db):
 
     monkeypatch.setattr(main_module.agent_client, "query_agent", _fake_query)
 
-    response = _chat(KNOWN_TENANT)
+    token = _authed_token(mock_db, tenant_id=KNOWN_TENANT)
+    response = _chat(KNOWN_TENANT, token=token)
 
     assert response.status_code == 200, response.text
     assert response.json()["response"] == "hello back"
@@ -221,10 +234,10 @@ def test_refund_store_tenant_config_conflict_is_a_503_that_leaks_nothing(monkeyp
 
 def test_tenant_id_is_required_on_the_request_body():
     """No default tenant: a body without tenant_id is a 422, not an implicit
-    fallback."""
+    fallback. Pydantic body validation happens before authentication, so this
+    is unaffected by whether a token is presented — no header needed here."""
     response = client.post(
         "/api/chat",
-        headers={"X-User-Id": "anon-smoke"},
         json={"message": "hello"},
     )
 

@@ -177,6 +177,7 @@ test-tools: ## Run pure tool tests (no LLM, mocked Firestore) — fast
 		tests/unit/test_backend_tenant_isolation.py \
 		tests/unit/test_chat_tenant_validation.py \
 		tests/unit/test_tenant_existence_oracle.py \
+		tests/unit/test_no_client_asserted_identity.py \
 		tests/unit/test_backfill_tenant_ids.py \
 		$(PYTEST_FLAGS)
 

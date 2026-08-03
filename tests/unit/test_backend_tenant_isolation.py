@@ -148,17 +148,41 @@ def _login(tenant_id, email, password=PASSWORD):
     )
 
 
-def _chat(tenant_id, message="hello", session_id=None, user_id="anon-shopper", token=None):
-    headers = {"Authorization": f"Bearer {token}"} if token else {"X-User-Id": user_id}
+def _auth(token):
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _authed_token(db_client, tenant_id, user_id=None):
+    """Mint a real token in `db_client`'s database for `tenant_id`, the way
+    /api/auth/anonymous or /api/auth/register do — X-User-Id is no longer a
+    trusted credential, so every test needing an authenticated caller now
+    needs a real token, scoped to the exact tenant database it must verify
+    against (database_id follows this suite's own `f"{tenant_id}-db"`
+    convention — see `tenant_databases`/`tenant_b` above).
+
+    Pass `user_id` to mint a token for a specific, already-known identity
+    (e.g. one planted directly into a mock database); omit it to create a
+    fresh anonymous user and return their token, the common case.
+    """
+    from backend.app.database import Database
+
+    db = Database(project_id="test-project", database_id=f"{tenant_id}-db", tenant_id=tenant_id, client=db_client)
+    if user_id is not None:
+        return db.create_token(user_id)
+    _, token = db.create_anonymous_user()
+    return token
+
+
+def _chat(tenant_id, message="hello", session_id=None, token=None):
     body = {"message": message, "tenant_id": tenant_id}
     if session_id:
         body["session_id"] = session_id
-    return client.post("/api/chat", headers=headers, json=body)
+    return client.post("/api/chat", headers=_auth(token), json=body)
 
 
-def _start_session(tenant_id, user_id="anon-shopper"):
+def _start_session(tenant_id, token):
     """Run one chat turn and return the internal session_id it created."""
-    response = _chat(tenant_id, user_id=user_id)
+    response = _chat(tenant_id, token=token)
     assert response.status_code == 200, response.text
     return response.json()["session_id"]
 
@@ -252,9 +276,16 @@ def test_session_cannot_be_continued_by_a_request_claiming_another_tenant(mock_d
     only at creation and never re-passes it, the resumed conversation would
     have kept running against Merchant A's data under Merchant B's name.
     """
-    session_id = _start_session(TENANT_A)
+    token_a = _authed_token(mock_db, TENANT_A)
+    session_id = _start_session(TENANT_A, token=token_a)
 
-    response = _chat(TENANT_B, message="and what about my order?", session_id=session_id)
+    # The caller here is a genuinely authenticated Tenant B user (their own
+    # real token) — not the Tenant A owner — attempting to continue Tenant
+    # A's session while claiming tenant_id=B. Without a real Tenant B
+    # credential the request would 401 before ever reaching the session
+    # check, which would test authentication rather than isolation.
+    token_b = _authed_token(tenant_b, TENANT_B)
+    response = _chat(TENANT_B, message="and what about my order?", session_id=session_id, token=token_b)
 
     # 404 rather than 403: confirming the id exists under another tenant
     # would itself be a cross-tenant disclosure.
@@ -264,9 +295,10 @@ def test_session_cannot_be_continued_by_a_request_claiming_another_tenant(mock_d
 
 def test_continuing_under_the_owning_tenant_still_works(mock_db, tenant_b):
     """The guard must not break legitimate continuation."""
-    session_id = _start_session(TENANT_A)
+    token_a = _authed_token(mock_db, TENANT_A)
+    session_id = _start_session(TENANT_A, token=token_a)
 
-    response = _chat(TENANT_A, message="follow-up", session_id=session_id)
+    response = _chat(TENANT_A, message="follow-up", session_id=session_id, token=token_a)
 
     assert response.status_code == 200, response.text
     assert response.json()["session_id"] == session_id
@@ -276,10 +308,12 @@ def test_session_messages_are_not_readable_from_another_tenant(mock_db, tenant_b
     """Pre-fix this endpoint had no tenant_id at all and read the one shared
     database, so any caller who knew a session id could read its transcript
     from any tenant context."""
-    session_id = _start_session(TENANT_A)
+    token_a = _authed_token(mock_db, TENANT_A)
+    session_id = _start_session(TENANT_A, token=token_a)
 
-    ours = client.get(f"/api/sessions/{session_id}/messages?tenant_id={TENANT_A}", headers=_anon())
-    theirs = client.get(f"/api/sessions/{session_id}/messages?tenant_id={TENANT_B}", headers=_anon())
+    ours = client.get(f"/api/sessions/{session_id}/messages?tenant_id={TENANT_A}", headers=_auth(token_a))
+    token_b = _authed_token(tenant_b, TENANT_B)
+    theirs = client.get(f"/api/sessions/{session_id}/messages?tenant_id={TENANT_B}", headers=_auth(token_b))
 
     assert ours.status_code == 200
     assert [m["role"] for m in ours.json()["messages"]] == ["user", "assistant"]
@@ -287,9 +321,11 @@ def test_session_messages_are_not_readable_from_another_tenant(mock_db, tenant_b
 
 
 def test_session_cannot_be_deleted_from_another_tenant(mock_db, tenant_b):
-    session_id = _start_session(TENANT_A)
+    token_a = _authed_token(mock_db, TENANT_A)
+    session_id = _start_session(TENANT_A, token=token_a)
 
-    response = client.delete(f"/api/sessions/{session_id}?tenant_id={TENANT_B}", headers=_anon())
+    token_b = _authed_token(tenant_b, TENANT_B)
+    response = client.delete(f"/api/sessions/{session_id}?tenant_id={TENANT_B}", headers=_auth(token_b))
 
     assert response.status_code == 404
     # And it is genuinely untouched, not merely reported as missing.
@@ -297,11 +333,13 @@ def test_session_cannot_be_deleted_from_another_tenant(mock_db, tenant_b):
 
 
 def test_session_cannot_be_renamed_from_another_tenant(mock_db, tenant_b):
-    session_id = _start_session(TENANT_A)
+    token_a = _authed_token(mock_db, TENANT_A)
+    session_id = _start_session(TENANT_A, token=token_a)
 
+    token_b = _authed_token(tenant_b, TENANT_B)
     response = client.put(
         f"/api/sessions/{session_id}/rename?tenant_id={TENANT_B}",
-        headers=_anon(),
+        headers=_auth(token_b),
         json={"session_name": "pwned"},
     )
 
@@ -310,12 +348,15 @@ def test_session_cannot_be_renamed_from_another_tenant(mock_db, tenant_b):
 
 
 def test_session_list_never_crosses_tenants(mock_db, tenant_b):
-    """Same user_id, two merchants: each context sees only its own sessions."""
-    session_a = _start_session(TENANT_A)
-    session_b = _start_session(TENANT_B)
+    """Two merchants, two independent authenticated users: each context sees
+    only its own sessions."""
+    token_a = _authed_token(mock_db, TENANT_A)
+    token_b = _authed_token(tenant_b, TENANT_B)
+    session_a = _start_session(TENANT_A, token=token_a)
+    session_b = _start_session(TENANT_B, token=token_b)
 
-    listed_a = client.get(f"/api/sessions?tenant_id={TENANT_A}", headers=_anon()).json()["sessions"]
-    listed_b = client.get(f"/api/sessions?tenant_id={TENANT_B}", headers=_anon()).json()["sessions"]
+    listed_a = client.get(f"/api/sessions?tenant_id={TENANT_A}", headers=_auth(token_a)).json()["sessions"]
+    listed_b = client.get(f"/api/sessions?tenant_id={TENANT_B}", headers=_auth(token_b)).json()["sessions"]
 
     assert [s["session_id"] for s in listed_a] == [session_a]
     assert [s["session_id"] for s in listed_b] == [session_b]
@@ -330,8 +371,10 @@ def test_session_list_never_crosses_tenants(mock_db, tenant_b):
     ],
 )
 def test_session_endpoints_require_a_tenant_id(method, path):
-    """No default tenant: the query parameter is required, not optional."""
-    response = getattr(client, method)(path, headers=_anon())
+    """No default tenant: the query parameter is required, not optional —
+    this 422 fires on FastAPI's own parameter validation before any
+    authentication dependency runs, so no credentials are needed here."""
+    response = getattr(client, method)(path)
     assert response.status_code == 422
 
 
@@ -356,7 +399,11 @@ def test_stored_session_tenant_is_checked_even_within_one_database(mock_db, tena
         }
     )
 
-    response = _chat(TENANT_A, session_id="planted-session")
+    # A real token, minted for the exact user_id planted above, so the
+    # user_id check passes and the tenant-mismatch check below it is the one
+    # actually exercised — that ordering is the point of this test.
+    token = _authed_token(mock_db, TENANT_A, user_id="anon-shopper")
+    response = _chat(TENANT_A, session_id="planted-session", token=token)
 
     assert response.status_code == 404
 
@@ -472,10 +519,6 @@ def test_a_tenant_with_no_account_database_is_a_503_not_a_shared_fallback(mock_d
     config_module.invalidate_tenant_config_cache()
     assert response.status_code == 503
     assert response.json() == {"detail": "Service temporarily unavailable for this tenant"}
-
-
-def _anon():
-    return {"X-User-Id": "anon-shopper"}
 
 
 if __name__ == "__main__":
