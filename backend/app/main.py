@@ -10,7 +10,11 @@ from fastapi.staticfiles import StaticFiles
 
 from customer_support_mas.providers.registry import get_provider
 from customer_support_mas.rate_limiting import check_tenant_rate_limit
-from customer_support_mas.tenancy.config import TenantNotFoundError, load_tenant_config
+from customer_support_mas.tenancy.config import (
+    TenantConfigConflictError,
+    TenantNotFoundError,
+    load_tenant_config,
+)
 
 from . import auth, refund_approvals
 from .agent_client import agent_client
@@ -413,6 +417,17 @@ async def chat(
         except TenantNotFoundError:
             logger.warning("Chat request for unknown tenant", tenant_id=request.tenant_id)
             raise HTTPException(status_code=404, detail=f"Unknown tenant_id: {request.tenant_id}")
+        except TenantConfigConflictError as exc:
+            # A misconfiguration, not a client error — and its message names
+            # BOTH colliding tenant ids and the shared database name, so it
+            # must never reach the caller. Log it server-side, return a
+            # generic 503.
+            logger.error(
+                "Tenant config conflict on chat request",
+                tenant_id=request.tenant_id,
+                error=str(exc),
+            )
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable for this tenant")
 
         # Per-tenant rate limit — an additional ceiling on top of the
         # per-user RateLimitDependency("chat") check above, not a
@@ -675,6 +690,12 @@ def resolve_refund_request_store(tenant_id: str):
         provider = get_provider(tenant_id)
     except TenantNotFoundError:
         raise HTTPException(status_code=404, detail=f"Unknown tenant_id: {tenant_id}")
+    except TenantConfigConflictError as exc:
+        # Same reasoning as /api/chat's handler: the conflict message names
+        # both colliding tenant ids and the shared database, so it stays in
+        # the logs and the caller gets a generic 503.
+        logger.error("Tenant config conflict resolving refund store", tenant_id=tenant_id, error=str(exc))
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable for this tenant")
 
     store = getattr(provider, "_db", None)
     if store is None:

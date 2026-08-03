@@ -30,10 +30,13 @@ anywhere in the system**, and this is enforced rather than documented:
   `get_provider(tenant_id)` picks the implementation (`FirestoreProvider`,
   `ShopifyProvider`) from that tenant's config.
 - Light-tier isolation is **physical**: one named Firestore database per
-  tenant inside a shared pool project. Two tenants in one pool resolving to
-  the same `database_id` is refused with `TenantConfigConflictError` — see
-  `customer_support_mas/tenancy/config.py` and the release-gate suite in
-  `tests/unit/test_cross_tenant_isolation.py`.
+  tenant inside a shared pool project. This applies to commerce data
+  (orders, products, invoices, refunds) only — the backend's own
+  `users`/`sessions`/`tokens`/`messages` collections still live in one
+  shared database with no `tenant_id` at all. Two tenants in one pool
+  resolving to the same `database_id` is refused with
+  `TenantConfigConflictError` — see `customer_support_mas/tenancy/config.py`
+  and the release-gate suite in `tests/unit/test_cross_tenant_isolation.py`.
 - Anything that creates a session must supply it: the frontend
   (`VITE_TENANT_ID`), the smoke tests, `tests/eval_vertex.py`, and both eval
   dataset generators. Recorded eval datasets carry it in

@@ -142,6 +142,55 @@ def test_known_tenant_still_reaches_the_agent(monkeypatch):
     assert response.json()["response"] == "hello back"
 
 
+def test_tenant_config_conflict_is_a_503_that_leaks_nothing(monkeypatch):
+    """A misconfiguration must not echo the conflict message to the caller.
+
+    TenantConfigConflictError's message names BOTH colliding tenant ids and
+    the shared database name. It used to fall through to the generic
+    `except Exception` handler, which returns
+    `f"Error processing request: {e}"` — i.e. the whole message, verbatim, in
+    a 500 body.
+    """
+    from customer_support_mas.tenancy.config import TenantConfigConflictError
+
+    def _conflict(tenant_id):
+        raise TenantConfigConflictError(
+            f"Tenants 'victim-tenant' and {tenant_id!r} both resolve to database "
+            "'shared-secret-db' in scope 'test-pool'"
+        )
+
+    monkeypatch.setattr(main_module, "load_tenant_config", _conflict)
+
+    response = _chat(KNOWN_TENANT)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Service temporarily unavailable for this tenant"}
+    assert "victim-tenant" not in response.text
+    assert "shared-secret-db" not in response.text
+
+
+def test_refund_store_tenant_config_conflict_is_a_503_that_leaks_nothing(monkeypatch):
+    """Same finding, second call site: resolve_refund_request_store."""
+    from fastapi import HTTPException
+
+    from customer_support_mas.tenancy.config import TenantConfigConflictError
+
+    def _conflict(tenant_id):
+        raise TenantConfigConflictError(
+            f"Tenants 'victim-tenant' and {tenant_id!r} both resolve to database 'shared-secret-db'"
+        )
+
+    monkeypatch.setattr(main_module, "get_provider", _conflict)
+
+    with pytest.raises(HTTPException) as exc_info:
+        main_module.resolve_refund_request_store(KNOWN_TENANT)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Service temporarily unavailable for this tenant"
+    assert "victim-tenant" not in str(exc_info.value.detail)
+    assert "shared-secret-db" not in str(exc_info.value.detail)
+
+
 def test_tenant_id_is_required_on_the_request_body():
     """No default tenant: a body without tenant_id is a 422, not an implicit
     fallback."""
