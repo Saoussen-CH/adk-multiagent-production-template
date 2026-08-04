@@ -16,10 +16,12 @@ USAGE:
         temperature=config.get("temperature", 0.1),
     )
 
-COST OPTIMIZATION:
-    - Main agents use gemini-2.5-pro for complex reasoning
-    - Sub-agents use gemini-2.5-flash for simple tool calls (10x cheaper)
-    - Potential 40-60% cost reduction with no quality loss
+MODEL:
+    - All agents (root, specialists, refund workflow) run on gemini-3.5-flash —
+      "near-Pro intelligence at Flash-tier cost" per Google's positioning, so
+      the previous Pro/Flash cost-tiering split is no longer needed. Change
+      DEFAULT_MODEL / FAST_MODEL below to re-introduce a split if eval
+      results ever show a quality gap on the root/refund workflow.
 """
 
 import os
@@ -48,17 +50,18 @@ ENVIRONMENT = os.environ.get("ENV", "production")
 # =============================================================================
 
 # Primary model for complex reasoning (root, domain, workflow agents)
-DEFAULT_MODEL = "gemini-2.5-pro"
+DEFAULT_MODEL = "gemini-3.5-flash"
 
 # Fast model for simple tool calls (sub-agents)
-# gemini-2.5-flash is ~10x cheaper and sufficient for simple operations
-FAST_MODEL = "gemini-2.5-flash"
+# Same model as DEFAULT_MODEL as of the gemini-3.5-flash swap — kept as a
+# separate constant so a future cost/quality split is a one-line change.
+FAST_MODEL = "gemini-3.5-flash"
 
 # Environment-specific overrides
 if ENVIRONMENT == "development":
     # Use faster/cheaper models in development
-    DEFAULT_MODEL = "gemini-2.5-flash"
-    FAST_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-3.5-flash"
+    FAST_MODEL = "gemini-3.5-flash"
 
 # =============================================================================
 # AGENT CONFIGURATIONS
