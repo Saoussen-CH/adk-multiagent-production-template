@@ -76,10 +76,10 @@ install: ## Install Python deps + pre-commit hooks (uses uv)
 	@echo "Done. Run 'make setup-gcp' next if setting up GCP for the first time."
 
 setup-gcp: ## Enable GCP APIs and configure IAM (reads .env)
-	bash scripts/setup_gcp.sh
+	bash ops/setup_gcp.sh
 
 setup-firestore: ## Create Firestore database and seed sample data
-	bash scripts/setup_firestore.sh
+	bash ops/setup_firestore.sh
 
 setup-cloud-build: ## Configure Cloud Build IAM, Artifact Registry, and Secret Manager
 	@PROJECT_ID="$(PROJECT_ID)"; \
@@ -99,19 +99,19 @@ setup-cloud-build: ## Configure Cloud Build IAM, Artifact Registry, and Secret M
 	if [ -z "$$GITHUB_OWNER_ARG" ] && [ -f .env ]; then \
 		GITHUB_OWNER_ARG=$$(grep '^GITHUB_OWNER=' .env | cut -d= -f2- || echo ""); \
 	fi; \
-	bash scripts/setup-cloud-build.sh "$$PROJECT_ID" "$$REGION" "$$STAGING_BUCKET" "$$GITHUB_OWNER_ARG"
+	bash ops/setup-cloud-build.sh "$$PROJECT_ID" "$$REGION" "$$STAGING_BUCKET" "$$GITHUB_OWNER_ARG"
 
 setup-model-armor: ## Enable Model Armor and configure floor settings
 	@ARGS=""; \
 	if [ -n "$(MODE)" ]; then ARGS="$$ARGS --mode $(MODE)"; fi; \
 	if [ -n "$(CREATE_TEMPLATE)" ]; then ARGS="$$ARGS --create-template"; fi; \
-	bash scripts/setup_model_armor.sh $$ARGS
+	bash ops/setup_model_armor.sh $$ARGS
 
 create-model-armor-template: ## Create Model Armor template via Python SDK (use when gcloud model-armor is unavailable)
-	PYTHONPATH=. $(PYTHON) scripts/create_model_armor_template.py
+	PYTHONPATH=. $(PYTHON) ops/create_model_armor_template.py
 
 test-model-armor: ## Smoke test Model Armor API (safe + unsafe prompts)
-	PYTHONPATH=. $(PYTHON) scripts/test_model_armor.py
+	PYTHONPATH=. $(PYTHON) tests/test_model_armor.py
 
 seed-db: ## Seed Firestore with sample products, orders, invoices, users (use ENV=staging|prod)
 	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
@@ -205,13 +205,13 @@ test: test-tools test-unit test-integration ## Run all tests (EVAL_PROFILE=fast 
 gen-evalset: ## Generate unit eval dataset — AGENT=product|order|billing (default: product)
 	@ARGS="--agent $(AGENT) --delay $(DELAY)"; \
 	if [ -n "$(DRY_RUN)" ]; then ARGS="$$ARGS --dry-run"; fi; \
-	PYTHONPATH=. $(PYTHON) scripts/generate_eval_dataset.py $$ARGS
+	PYTHONPATH=. $(PYTHON) tests/generate_eval_dataset.py $$ARGS
 
 gen-integration-evalset: ## Generate integration eval dataset
 	@ARGS="--delay $(DELAY)"; \
 	if [ -n "$(SUITE)" ]; then ARGS="$$ARGS --suite $(SUITE)"; fi; \
 	if [ -n "$(DRY_RUN)" ]; then ARGS="$$ARGS --dry-run"; fi; \
-	PYTHONPATH=. $(PYTHON) scripts/generate_integration_evalset.py $$ARGS
+	PYTHONPATH=. $(PYTHON) tests/generate_integration_evalset.py $$ARGS
 
 # ==============================================================================
 # POST-DEPLOY EVALUATION

@@ -148,9 +148,7 @@ def build_plugins() -> list:
     ):
         from customer_support_mas.safety import ModelArmorSafetyFilterPlugin
 
-        plugins.append(
-            ModelArmorSafetyFilterPlugin(template_id=MODEL_ARMOR_CONFIG["template_id"])
-        )
+        plugins.append(ModelArmorSafetyFilterPlugin(template_id=MODEL_ARMOR_CONFIG["template_id"]))
     return plugins
 
 
@@ -243,8 +241,18 @@ async def test_locally():
         plugins=build_plugins(),
     )
 
-    session = await app.async_create_session(user_id="demo-user-001")
-    print(f"\n✓ Created local session: {session.id}")
+    # tenant_id is required in session state — every tool resolves it via
+    # get_tenant_id(tool_context) and hard-raises MissingTenantError if
+    # absent, matching the "no default tenant" rule everywhere else in this
+    # system. TEST_LOCAL_TENANT_ID lets this be overridden for a project
+    # seeded with a different tenant; "acme-electronics" is what
+    # customer_support_mas/database/fixtures.py seeds by default.
+    tenant_id = os.environ.get("TEST_LOCAL_TENANT_ID", "acme-electronics")
+    session = await app.async_create_session(user_id="demo-user-001", state={"tenant_id": tenant_id})
+    # async_create_session returns a plain dict (current ADK SDK), not an
+    # object with a `.id` attribute.
+    session_id = session["id"]
+    print(f"\n✓ Created local session: {session_id} (tenant_id={tenant_id})")
 
     test_queries = [
         "Hi, I need some help today",
@@ -265,7 +273,7 @@ async def test_locally():
         try:
             async for event in app.async_stream_query(
                 user_id="demo-user-001",
-                session_id=session.id,
+                session_id=session_id,
                 message=query,
             ):
                 content = event.get("content", {})

@@ -41,8 +41,13 @@ echo ""
 echo -e "${YELLOW}[1/3] Checking Firestore database...${NC}"
 echo ""
 
-# Try to describe the database
-if gcloud firestore databases describe "$DATABASE_ID" --project="$PROJECT_ID" &>/dev/null; then
+# Try to describe the database. --database is a required flag here, not a
+# positional argument — `gcloud firestore databases describe DATABASE_ID`
+# fails with "unrecognized arguments" regardless of whether the database
+# exists, which silently defeated this idempotency check (every run fell
+# through to the create branch and failed with a conflict error on any
+# database that already existed).
+if gcloud firestore databases describe --database="$DATABASE_ID" --project="$PROJECT_ID" &>/dev/null; then
     echo -e "  ${YELLOW}⚠${NC} Database already exists: $DATABASE_ID"
     echo -e "  Skipping database creation"
 else
