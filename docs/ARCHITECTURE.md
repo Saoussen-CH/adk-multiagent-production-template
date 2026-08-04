@@ -88,17 +88,17 @@ graph TB
 
     subgraph "Vertex AI Agent Engine Runtime"
         subgraph "Root Coordinator"
-            RootAgent[Root Agent<br/>Model: Gemini 2.5 Pro<br/>Callback: auto_save_to_memory_sdk]
+            RootAgent[Root Agent<br/>Model: Gemini 3.5 Flash<br/>Callback: auto_save_to_memory_sdk]
         end
 
         subgraph "Specialist Agents"
-            ProductAgent[Product Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>Callback: auto_save_to_memory_sdk]
-            OrderAgent[Order Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>Callback: auto_save_to_memory_sdk]
-            BillingAgent[Billing Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>Callback: auto_save_to_memory_sdk]
+            ProductAgent[Product Agent<br/>Model: Gemini 3.5 Flash<br/>+ PreloadMemoryTool<br/>Callback: auto_save_to_memory_sdk]
+            OrderAgent[Order Agent<br/>Model: Gemini 3.5 Flash<br/>+ PreloadMemoryTool<br/>Callback: auto_save_to_memory_sdk]
+            BillingAgent[Billing Agent<br/>Model: Gemini 3.5 Flash<br/>+ PreloadMemoryTool<br/>Callback: auto_save_to_memory_sdk]
         end
 
         subgraph "Workflow Patterns"
-            RefundWorkflow[Sequential Workflow<br/>Model: Gemini 2.5 Pro<br/>3-Step Validation]
+            RefundWorkflow[Sequential Workflow<br/>Model: Gemini 3.5 Flash<br/>3-Step Validation]
         end
     end
 
@@ -149,17 +149,17 @@ This diagram shows the complete flow from user queries through the Root Agent co
 ```mermaid
 graph TD
     subgraph "Root Layer"
-        Root[Root Agent<br/>Model: Gemini 2.5 Pro<br/>Role: Coordinator & Router]
+        Root[Root Agent<br/>Model: Gemini 3.5 Flash<br/>Role: Coordinator & Router]
     end
 
     subgraph "Domain Specialists"
-        Product[Product Agent<br/>Model: Gemini 2.5 Flash<br/>8 Tools + PreloadMemoryTool]
-        Order[Order Agent<br/>Model: Gemini 2.5 Flash<br/>5 Tools incl. verify_order_access]
-        Billing[Billing Agent<br/>Model: Gemini 2.5 Flash<br/>6 Tools + PreloadMemoryTool]
+        Product[Product Agent<br/>Model: Gemini 3.5 Flash<br/>8 Tools + PreloadMemoryTool]
+        Order[Order Agent<br/>Model: Gemini 3.5 Flash<br/>5 Tools incl. verify_order_access]
+        Billing[Billing Agent<br/>Model: Gemini 3.5 Flash<br/>6 Tools + PreloadMemoryTool]
     end
 
     subgraph "Workflow Patterns"
-        Sequential[Sequential Workflow<br/>Model: Gemini 2.5 Pro<br/>3-Step Refund Validation]
+        Sequential[Sequential Workflow<br/>Model: Gemini 3.5 Flash<br/>3-Step Refund Validation]
     end
 
     Root -->|Products Query| Product
@@ -183,7 +183,7 @@ The multi-agent hierarchy shows the Root Agent coordinator routing to specialist
 ```mermaid
 graph TB
     subgraph "Root Agent"
-        Agent[Root Agent<br/>Model: Gemini 2.5 Pro<br/>Coordinator & Router<br/>Callback: auto_save_to_memory_sdk]
+        Agent[Root Agent<br/>Model: Gemini 3.5 Flash<br/>Coordinator & Router<br/>Callback: auto_save_to_memory_sdk]
         ErrorHandling[ERROR HANDLING<br/>Always respond to user<br/>Graceful fallbacks]
     end
 
@@ -213,7 +213,7 @@ Full diagram: [`docs/diagrams/root-agent.mmd`](./diagrams/root-agent.mmd)
 
 **Role:** Routes requests to specialist agents
 
-**Model:** Gemini 2.5 Pro
+**Model:** Gemini 3.5 Flash
 
 **Callback:** `auto_save_to_memory_sdk` - Saves full conversation to Memory Bank
 
@@ -238,7 +238,7 @@ Refunds → refund_workflow
 ```mermaid
 graph TB
     subgraph "Product Agent"
-        Agent[Product Agent<br/>Model: Gemini 2.5 Flash<br/>Callback: auto_save_to_memory_sdk]
+        Agent[Product Agent<br/>Model: Gemini 3.5 Flash<br/>Callback: auto_save_to_memory_sdk]
     end
 
     subgraph "Tools"
@@ -292,7 +292,7 @@ Full diagram: [`docs/diagrams/product-agent.mmd`](./diagrams/product-agent.mmd)
 
 **Role:** Handles product search, details, inventory, reviews
 
-**Model:** Gemini 2.5 Flash
+**Model:** Gemini 3.5 Flash
 
 **Tools:**
 - `PreloadMemoryTool` - Loads user memories at session start (budget preferences, product interests)
@@ -319,7 +319,7 @@ Full diagram: [`docs/diagrams/product-agent.mmd`](./diagrams/product-agent.mmd)
 ```mermaid
 graph TB
     subgraph "Order Agent"
-        Agent[Order Agent<br/>Model: Gemini 2.5 Flash<br/>Callback: auto_save_to_memory_sdk]
+        Agent[Order Agent<br/>Model: Gemini 3.5 Flash<br/>Callback: auto_save_to_memory_sdk]
     end
 
     subgraph "Tools"
@@ -365,7 +365,7 @@ Full diagram: [`docs/diagrams/order-agent.mmd`](./diagrams/order-agent.mmd)
 
 **Role:** Order tracking and history, plus guest order verification
 
-**Model:** Gemini 2.5 Flash
+**Model:** Gemini 3.5 Flash
 
 **Tools:**
 - `PreloadMemoryTool` - Loads user memories at session start
@@ -388,7 +388,7 @@ Full diagram: [`docs/diagrams/order-agent.mmd`](./diagrams/order-agent.mmd)
 ```mermaid
 graph TB
     subgraph "Billing Agent"
-        Agent[Billing Agent<br/>Model: Gemini 2.5 Flash<br/>Callback: auto_save_to_memory_sdk]
+        Agent[Billing Agent<br/>Model: Gemini 3.5 Flash<br/>Callback: auto_save_to_memory_sdk]
         Note[NOTE: Refunds processed<br/>via refund_workflow only]
     end
 
@@ -436,7 +436,7 @@ Full diagram: [`docs/diagrams/billing-agent.mmd`](./diagrams/billing-agent.mmd)
 
 **Role:** Invoices, payments, refunds
 
-**Model:** Gemini 2.5 Flash
+**Model:** Gemini 3.5 Flash
 
 **Tools:**
 - `PreloadMemoryTool` - Loads user memories at session start
@@ -914,8 +914,8 @@ tests/
 ## Technology Stack
 
 - **Google ADK** - Agent framework
-- **Gemini 2.5 Pro** - Root agent model
-- **Gemini 2.5 Flash** - Specialist agents
+- **Gemini 3.5 Flash** - Root agent model
+- **Gemini 3.5 Flash** - Specialist agents
 - **Firestore** - NoSQL database + vector search (See [DATA_MODEL.md](./DATA_MODEL.md) for complete user data model, auth flow, and demo accounts.)
 - **Vertex AI** - Embeddings + Agent Engine
 - **FastAPI** - Backend API

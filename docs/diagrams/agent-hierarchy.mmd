@@ -3,24 +3,24 @@
 
 graph TD
     subgraph "Root Layer"
-        Root[🎯 Root Agent<br/>Model: Gemini 2.5 Pro<br/>Role: Coordinator & Router<br/>Error Handling: Always respond to user]
+        Root[🎯 Root Agent<br/>Model: Gemini 3.5 Flash<br/>Role: Coordinator & Router<br/>Error Handling: Always respond to user]
     end
 
     subgraph "Domain Specialists"
-        Product[🛍️ Product Agent<br/>Model: Gemini 2.5 Flash<br/>Tools: 8<br/>• PreloadMemoryTool<br/>• search_products RAG<br/>• get_product_info default<br/>• get_all_saved_products_info multi]
+        Product[🛍️ Product Agent<br/>Model: Gemini 3.5 Flash<br/>Tools: 8<br/>• PreloadMemoryTool<br/>• search_products RAG<br/>• get_product_info default<br/>• get_all_saved_products_info multi]
 
-        Order[📦 Order Agent<br/>Model: Gemini 2.5 Flash<br/>Tools: 5<br/>• PreloadMemoryTool<br/>• track_order<br/>• get_my_order_history<br/>• get_order_history<br/>• get_order_details]
+        Order[📦 Order Agent<br/>Model: Gemini 3.5 Flash<br/>Tools: 5<br/>• PreloadMemoryTool<br/>• track_order<br/>• get_my_order_history<br/>• get_order_history<br/>• get_order_details]
 
-        Billing[💳 Billing Agent<br/>Model: Gemini 2.5 Flash<br/>Tools: 8<br/>• PreloadMemoryTool<br/>• get_invoice<br/>• get_invoice_by_order_id<br/>• get_my_invoices<br/>• check_payment_status<br/>• get_my_payments<br/>• get_refundable_items<br/>• get_acceptable_refund_reasons<br/>Note: Refunds via refund_workflow only]
+        Billing[💳 Billing Agent<br/>Model: Gemini 3.5 Flash<br/>Tools: 8<br/>• PreloadMemoryTool<br/>• get_invoice<br/>• get_invoice_by_order_id<br/>• get_my_invoices<br/>• check_payment_status<br/>• get_my_payments<br/>• get_refundable_items<br/>• get_acceptable_refund_reasons<br/>Note: Refunds via refund_workflow only]
     end
 
     subgraph "Workflow Patterns"
-        Sequential[🔄 Sequential Workflow<br/>Model: Gemini 2.5 Pro<br/>Refund Process with Validation Gates<br/>ONLY way to process refunds]
+        Sequential[🔄 Sequential Workflow<br/>Model: Gemini 3.5 Flash<br/>Refund Process with Validation Gates<br/>ONLY way to process refunds]
 
         subgraph "Sequential Steps"
-            S1[1️⃣ Order Validator<br/>Gemini 2.5 Flash]
-            S2[2️⃣ Eligibility Checker<br/>Gemini 2.5 Flash]
-            S3[3️⃣ Refund Processor<br/>Gemini 2.5 Flash]
+            S1[1️⃣ Order Validator<br/>Gemini 3.5 Flash]
+            S2[2️⃣ Eligibility Checker<br/>Gemini 3.5 Flash]
+            S3[3️⃣ Refund Processor<br/>Gemini 3.5 Flash]
         end
     end
 

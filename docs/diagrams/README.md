@@ -70,9 +70,8 @@ All agents use `auto_save_to_memory` callback which:
 - Note: `track_agent_start` callback is defined but not active by default
 
 **Agent Hierarchy:**
-- Root Agent: Gemini 2.5 Pro (complex reasoning, coordination)
-- Specialist Agents: Gemini 2.5 Flash (cost-optimized, simple tool calls)
-- Sequential Workflow: Gemini 2.5 Pro (refund validation logic)
+- All agents (Root, Specialists, Sequential Workflow) run Gemini 3.5 Flash — "near-Pro intelligence at Flash-tier cost," so the previous Pro/Flash cost-tiering split is no longer needed
+- Memory Bank consolidation uses a separate model (Gemini 2.5 Flash) — see the Memory Bank section above
 
 ## Rendering
 

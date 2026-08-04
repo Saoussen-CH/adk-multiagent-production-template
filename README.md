@@ -2,7 +2,7 @@
 
 [![Use this template](https://img.shields.io/badge/Use_this_template-2ea44f?style=for-the-badge&logo=github)](../../generate)
 
-Reference implementation of a customer support system built with Google ADK and Gemini 2.5 Pro, demonstrating production patterns: multi-agent orchestration, RAG, Memory Bank, 5-stage evaluation, CI/CD pipelines, Model Armor, Firestore, Cloud Run, and full infrastructure-as-code with Terraform.
+Reference implementation of a customer support system built with Google ADK and Gemini 3.5 Flash, demonstrating production patterns: multi-agent orchestration, RAG, Memory Bank, 5-stage evaluation, CI/CD pipelines, Model Armor, Firestore, Cloud Run, and full infrastructure-as-code with Terraform.
 
 > **Getting started?** See **[GETTING_STARTED.md](./GETTING_STARTED.md)**
 
@@ -44,7 +44,7 @@ For full details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 
 | Feature | Implementation | Notes |
 |---------|----------------|-------|
-| Multi-Agent Orchestration | Root + 3 Specialists + Workflow agents | Cost-optimized with Gemini 2.5 Pro + Flash |
+| Multi-Agent Orchestration | Root + 3 Specialists + Workflow agents | All agents run Gemini 3.5 Flash — near-Pro intelligence at Flash-tier cost, no separate Pro/Flash split needed |
 | Sequential Workflows | 3-step refund pipeline with human-in-the-loop approval | LLM only *stages* a refund; a human approves (dual control) before deterministic code executes it |
 | Session Management | Vertex AI Agent Engine sessions | Backend proxy with JWT auth + multi-user support |
 | Memory Bank | Vertex AI Memory Bank with callbacks | Cross-session preference recall |
@@ -68,10 +68,10 @@ The system uses a root agent that routes each request to the right specialist:
 
 ```
 User message
-    └─► Root Agent (Gemini 2.5 Pro)
-            ├─► Product Agent   (Gemini 2.5 Flash)
-            ├─► Order Agent     (Gemini 2.5 Flash)
-            ├─► Billing Agent   (Gemini 2.5 Flash)
+    └─► Root Agent (Gemini 3.5 Flash)
+            ├─► Product Agent   (Gemini 3.5 Flash)
+            ├─► Order Agent     (Gemini 3.5 Flash)
+            ├─► Billing Agent   (Gemini 3.5 Flash)
             └─► Refund Workflow (SequentialAgent)
                     ├─► Step 1: Validate order
                     ├─► Step 2: Check eligibility
@@ -91,7 +91,7 @@ User message
 
 **Backend:** FastAPI · Python 3.11 · Pydantic
 
-**AI/ML:** Google ADK · Gemini 2.5 Pro/Flash · Vertex AI Agent Engine · Vertex AI Memory Bank · text-embedding-004
+**AI/ML:** Google ADK · Gemini 3.5 Flash (agents) · Gemini 2.5 Flash (Memory Bank consolidation) · Vertex AI Agent Engine · Vertex AI Memory Bank · text-embedding-004
 
 **Data:** Firestore (NoSQL + vector search)
 

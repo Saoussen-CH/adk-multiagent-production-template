@@ -25,7 +25,7 @@ The system uses a **root agent** that routes each user request to the right spec
 
 ```
 User message
-    └─► Root Agent (Gemini 2.5 Pro)
+    └─► Root Agent (Gemini 3.5 Flash)
             ├─► Product Agent  → search_products, get_product_info, check_inventory, ...
             ├─► Order Agent    → track_order, get_order_history, verify_order_access (guest step-up)
             ├─► Billing Agent  → get_invoice, check_payment_status, get_my_invoices, ...
@@ -40,7 +40,7 @@ User message
 
 - **Google ADK** (Agent Development Kit): agent framework
 - **Vertex AI Agent Engine**: serverless, scalable agent hosting
-- **Gemini 2.5 Pro**: root agent model; **Gemini 2.5 Flash**: specialist agents (cost-optimized)
+- **Gemini 3.5 Flash**: all agents (root, specialists, refund workflow) — "near-Pro intelligence at Flash-tier cost," so no separate Pro/Flash cost-tiering is needed
 - **`CommerceProvider` abstraction**: every commerce tool (orders, invoices, products) goes through a `CommerceProvider` protocol, not raw Firestore calls directly — `FirestoreProvider` is the default implementation; a `ShopifyProvider` stub demonstrates plugging in a different commerce backend per tenant
 - **Multi-tenant by design**: every request carries a `tenant_id`; there's no default/implicit tenant. Each tenant resolves to its own Firestore database (or external provider). See [Multi-tenancy](#multi-tenancy-every-request-needs-a-tenant_id) below
 - **Firestore**: product catalog, orders, invoices, users — scoped per tenant

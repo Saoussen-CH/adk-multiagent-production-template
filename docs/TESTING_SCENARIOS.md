@@ -241,10 +241,10 @@ This document contains testing scenarios for demonstrating the Multi-Agent Custo
 ### Test 9.1: Root Agent Routing to Product Agent
 **Steps:**
 1. Send: "I'm looking for wireless headphones"
-2. Verify Product Agent (Gemini 2.5 Flash) handles the query
+2. Verify Product Agent (Gemini 3.5 Flash) handles the query
 3. Verify `search_products` tool is called
 
-**Expected:** Root Agent (Gemini 2.5 Pro) routes to Product Agent for product queries.
+**Expected:** Root Agent (Gemini 3.5 Flash) routes to Product Agent for product queries.
 
 ---
 
@@ -306,4 +306,4 @@ This document contains testing scenarios for demonstrating the Multi-Agent Custo
 - **RAG**: Emphasize that "gaming computer" finds ROG Gaming Laptop via vector similarity, not keyword match
 - **Refund workflow**: Point out the 3 sequential validation steps and that each must pass before the next runs
 - **Memory Bank**: Best demonstrated across two separate browser sessions (logout/login between them)
-- **Multi-agent routing**: Mention which specialist agent (Product/Order/Billing) handles each request and why Root uses Pro while specialists use Flash (cost optimization)
+- **Multi-agent routing**: Mention which specialist agent (Product/Order/Billing) handles each request and note all agents run the same model (Gemini 3.5 Flash) — no separate Pro/Flash cost tiering needed

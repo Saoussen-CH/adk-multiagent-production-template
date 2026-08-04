@@ -12,17 +12,17 @@ graph TB
 
     subgraph "Vertex AI Agent Engine Runtime (Agent Identity)"
         subgraph "Root Coordinator"
-            RootAgent[🤖 Root Agent<br/>Model: Gemini 2.5 Pro<br/>Error Handling: Always Respond<br/>Callback: auto_save_to_memory]
+            RootAgent[🤖 Root Agent<br/>Model: Gemini 3.5 Flash<br/>Error Handling: Always Respond<br/>Callback: auto_save_to_memory]
         end
 
         subgraph "Specialist Agents"
-            ProductAgent[🛍️ Product Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>+ get_product_info default<br/>Callback: auto_save_to_memory]
-            OrderAgent[📦 Order Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>+ track_shipment — MCP, env-gated<br/>Callback: auto_save_to_memory]
-            BillingAgent[💳 Billing Agent<br/>Model: Gemini 2.5 Flash<br/>+ PreloadMemoryTool<br/>Note: Refunds via workflow only<br/>Callback: auto_save_to_memory]
+            ProductAgent[🛍️ Product Agent<br/>Model: Gemini 3.5 Flash<br/>+ PreloadMemoryTool<br/>+ get_product_info default<br/>Callback: auto_save_to_memory]
+            OrderAgent[📦 Order Agent<br/>Model: Gemini 3.5 Flash<br/>+ PreloadMemoryTool<br/>+ track_shipment — MCP, env-gated<br/>Callback: auto_save_to_memory]
+            BillingAgent[💳 Billing Agent<br/>Model: Gemini 3.5 Flash<br/>+ PreloadMemoryTool<br/>Note: Refunds via workflow only<br/>Callback: auto_save_to_memory]
         end
 
         subgraph "Workflow Patterns"
-            RefundWorkflow[🔄 Sequential Workflow<br/>Model: Gemini 2.5 Pro<br/>3-Step: validate → eligibility → stage<br/>Only ever STAGES — never executes]
+            RefundWorkflow[🔄 Sequential Workflow<br/>Model: Gemini 3.5 Flash<br/>3-Step: validate → eligibility → stage<br/>Only ever STAGES — never executes]
         end
 
         subgraph "Memory Management"
