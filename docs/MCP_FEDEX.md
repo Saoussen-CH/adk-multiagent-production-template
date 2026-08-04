@@ -76,6 +76,22 @@ After deploying:
 By default `fedex-tracking-mcp` runs in mock mode and needs no secrets. To
 onboard real FedEx API credentials:
 
+0. **Get credentials from FedEx first — this step is manual, no script does
+   it for you.**
+
+   - Go to [developer.fedex.com](https://developer.fedex.com/) and create a
+     developer account.
+   - Create a new project, request access to the **Track API**.
+   - FedEx issues sandbox `client_id`/`client_secret` immediately on
+     project creation — enough to test against FedEx's own sandbox
+     tracking numbers (published in FedEx's Track API docs) without a real
+     shipment. Production credentials require FedEx's separate approval
+     process on top of sandbox access.
+   - Keep the client_id/client_secret somewhere local (a password
+     manager, not a chat transcript or a file that gets committed) — step
+     3 below reads them from a local file or stdin, never types them
+     into a command line argument that would land in shell history.
+
 1. Enable the Secret Manager resources (currently `count = 0` unless flagged
    on): in `terraform/environments/<env>/terraform.tfvars`, set
 
@@ -104,7 +120,23 @@ onboard real FedEx API credentials:
    `deployment/deploy-mcp-fedex.sh` only attaches `--set-secrets` for
    `FEDEX_CLIENT_ID` / `FEDEX_CLIENT_SECRET` when `FEDEX_MOCK != true`, so the
    Cloud Run service now reads live credentials from Secret Manager at
-   startup instead of running the mock client path.
+   startup instead of running the mock client path. Requires
+   `terraform/modules/core/secrets.tf`'s `cloud_run_fedex_client_id` /
+   `cloud_run_fedex_client_secret` grants (added alongside this section —
+   `roles/secretmanager.secretAccessor` for the Cloud Run service's own SA
+   on these two secrets specifically; without them this deploy fails with a
+   permission error at the `--set-secrets` mount step, not a soft failure).
+
+5. Verify: ask the agent to track one of FedEx's published sandbox
+   tracking numbers (or a real shipment if using production credentials).
+   The response's `source` field distinguishes real vs mock —
+   `fedex_client.py`'s `_parse_track_response()` sets `"source": "fedex"`
+   for a genuine API response vs `"source": "mock"` for the fixture path
+   (see `mcp_servers/fedex_tracking/fedex_client.py`). If the source still
+   reads `"mock"` after step 4, check `FEDEX_MOCK` actually landed as
+   `"false"` on the deployed Cloud Run revision
+   (`gcloud run services describe fedex-tracking-mcp --format="yaml(spec.template.spec.containers[0].env)"`)
+   rather than assuming the redeploy picked it up.
 
 This is the interim custody model per spec D4 — see section 5 for the planned
 migration once Auth Manager is stable.
