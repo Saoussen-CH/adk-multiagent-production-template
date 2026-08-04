@@ -160,9 +160,12 @@ See [docs/CI_CD.md](./docs/CI_CD.md) for full pipeline details.
 | [docs/CI_CD.md](./docs/CI_CD.md) | Cloud Build pipelines, triggers, branch strategy |
 | [docs/EVALUATION.md](./docs/EVALUATION.md) | 5-stage eval architecture + post-deploy eval |
 | [docs/TESTING_SCENARIOS.md](./docs/TESTING_SCENARIOS.md) | Demo scenarios, test data, credentials |
-| [docs/PREREQUISITES.md](./docs/PREREQUISITES.md) | GCP APIs, IAM roles, manual setup |
+| [docs/PREREQUISITES.md](./docs/PREREQUISITES.md) | GCP APIs, IAM roles, manual setup (legacy/reference; see DEPLOYMENT.md for the current path) |
 | [docs/ENV_SETUP.md](./docs/ENV_SETUP.md) | All environment variables explained |
 | [docs/MEMORY_BANK.md](./docs/MEMORY_BANK.md) | Memory Bank implementation details |
+| [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) | Firestore collections, user data model, guest order verification |
+| [docs/MCP_FEDEX.md](./docs/MCP_FEDEX.md) | Optional FedEx tracking MCP server: deploy, mock mode, Agent Gateway egress governance |
+| [docs/REFUND_APPROVALS.md](./docs/REFUND_APPROVALS.md) | HITL refund approval API, approver UI, bootstrapping an approver |
 | [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) | Firestore collections and schema |
 
 ---

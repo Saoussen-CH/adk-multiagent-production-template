@@ -194,6 +194,8 @@ VITE_TENANT_ID=acme-electronics
 
 Without this, every chat/session request 404s (unknown tenant) — this is enforced, not just a convention. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#multi-tenancy-tenant_id-is-required-everywhere).
 
+Also add the same value to the root `.env` (`VITE_TENANT_ID=acme-electronics`): `make deploy-cloud-run` reads it from there and passes it as a Docker build-arg. The production image never uses `frontend/.env` at all (deliberately deleted mid-build to strip any localhost URLs), so this is a separate, required copy, not a duplicate to clean up.
+
 ### Step 6: Test the agent locally
 
 ```bash
@@ -223,6 +225,24 @@ Then add embeddings and you're ready:
 ```bash
 make add-embeddings
 ```
+
+### Step 7a: (Optional) FedEx live order tracking via MCP
+
+The order agent can attach a FedEx tracking tool over MCP (Model Context Protocol), gated entirely by an env var: without `MCP_FEDEX_URL` set, the order agent is byte-for-byte its non-FedEx self. Ships with a deterministic mock mode, so this works with no real FedEx account.
+
+```bash
+make deploy-mcp-fedex FEDEX_MOCK=true   # deploys mcp_servers/fedex_tracking/ to Cloud Run
+make setup-gateway                      # egress Agent Gateway + Registry entries for the MCP server
+make register-platform-endpoints        # registers internal Google API hostnames (prerequisite for IAP enforcement)
+```
+
+Then add the printed MCP server URL to `.env`:
+
+```bash
+MCP_FEDEX_URL=https://fedex-tracking-mcp-XXXXX.us-central1.run.app/mcp
+```
+
+Full runbook (mock vs. real credentials, Agent Gateway egress governance, IAP enforcement, troubleshooting): [docs/MCP_FEDEX.md](./docs/MCP_FEDEX.md).
 
 ---
 
@@ -381,7 +401,7 @@ Session 2: "Tell me about the keyboard"
 | Product catalog and seed data | `customer_support_mas/database/fixtures.py` |
 | Agent instructions and behavior | `customer_support_mas/agents/` |
 | Add new tools (new Firestore queries) | `customer_support_mas/agents/<domain>/tools.py` |
-| Change models (e.g. Flash → Pro) | `customer_support_mas/config.py` |
+| Change models (e.g. per-agent overrides) | `customer_support_mas/config.py` (`DEFAULT_MODEL`/`FAST_MODEL`, both `gemini-3.5-flash` by default) |
 | Business rules (return window, etc.) | Tool implementations in `tools/` |
 
 ---
@@ -399,3 +419,5 @@ Session 2: "Tell me about the keyboard"
 | [docs/TESTING_SCENARIOS.md](./docs/TESTING_SCENARIOS.md) | Demo scenarios, test data, credentials |
 | [docs/MEMORY_BANK.md](./docs/MEMORY_BANK.md) | Memory Bank implementation details |
 | [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) | Firestore collections and schema |
+| [docs/MCP_FEDEX.md](./docs/MCP_FEDEX.md) | Optional FedEx tracking MCP server: deploy, mock mode, Agent Gateway egress governance |
+| [docs/REFUND_APPROVALS.md](./docs/REFUND_APPROVALS.md) | HITL refund approval API, approver UI, bootstrapping an approver |

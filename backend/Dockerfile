@@ -12,8 +12,19 @@ RUN npm ci
 
 COPY frontend/ ./
 
-# Remove .env files to prevent localhost URLs in production build
+# Remove .env files to prevent localhost URLs in production build. This
+# also strips VITE_TENANT_ID if a frontend/.env happened to be present in
+# the build context, so it must be re-supplied as a real env var (not a
+# file) for the multi-tenant frontend to work: Vite bakes VITE_-prefixed
+# vars into the built JS bundle at `npm run build` time from either an env
+# file OR the process environment, and ARG/ENV below is the latter. There
+# is no default: an unset tenant is a build-time error, not a silent
+# fallback, matching this system's "no default tenant anywhere" rule.
 RUN rm -f .env .env.local .env.development .env.production
+
+ARG VITE_TENANT_ID
+ENV VITE_TENANT_ID=${VITE_TENANT_ID}
+RUN test -n "$VITE_TENANT_ID" || (echo "ERROR: VITE_TENANT_ID build-arg is required (no default tenant)" && exit 1)
 
 RUN npm run build
 

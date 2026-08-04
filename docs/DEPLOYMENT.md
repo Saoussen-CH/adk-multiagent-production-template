@@ -164,6 +164,14 @@ Edit `frontend/.env`:
 VITE_TENANT_ID=acme-electronics   # the tenant make seed-db just created
 ```
 
+Also add the same line to the root `.env` (or `.env.dev`/`.env.staging`/
+`.env.prod`): `make deploy-cloud-run` reads `VITE_TENANT_ID` from there and
+passes it to `docker build` as a build-arg. The production image never
+reads `frontend/.env` at all — the Dockerfile deletes it mid-build to
+strip any localhost URLs — so this is a required second copy, not a
+duplicate to clean up. Without it, `docker build` fails fast rather than
+shipping an image with an undefined tenant baked in.
+
 See [ARCHITECTURE.md's Multi-tenancy section](./ARCHITECTURE.md#multi-tenancy-tenant_id-is-required-everywhere)
 for how this is enforced end-to-end.
 

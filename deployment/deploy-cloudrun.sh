@@ -44,6 +44,11 @@ if [ -z "$AGENT_ENGINE_RESOURCE_NAME" ]; then
   exit 1
 fi
 
+if [ -z "$VITE_TENANT_ID" ]; then
+  echo "ERROR: VITE_TENANT_ID not set. Please set it in .env (repo root) — there is no default tenant."
+  exit 1
+fi
+
 echo "================================================"
 echo "Deploying Customer Support AI to Cloud Run"
 echo "================================================"
@@ -88,7 +93,7 @@ IMAGE_URL="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME"
 gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
 
 # Build the image
-docker build -t $IMAGE_URL:latest -f backend/Dockerfile .
+docker build -t $IMAGE_URL:latest -f backend/Dockerfile --build-arg VITE_TENANT_ID="$VITE_TENANT_ID" .
 
 # Push the image
 docker push $IMAGE_URL:latest
