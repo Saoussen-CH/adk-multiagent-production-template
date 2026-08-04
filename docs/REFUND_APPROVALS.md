@@ -18,14 +18,17 @@ management yet — an approver is created by setting a `role` field directly
 on a user's document in the `users` collection of the `customer-support-db`
 Firestore database.
 
-**Via `gcloud`:**
+**Via a Python one-liner** (`gcloud firestore` has no document-level update
+command — only `bulk-delete`/`export`/`import`, all bulk/GCS operations, so
+there is no `gcloud` equivalent of this at all, not just a syntax
+difference):
 
 ```bash
-gcloud firestore documents update \
-  "projects/YOUR_PROJECT_ID/databases/customer-support-db/documents/users/demo-user-002" \
-  --update-mask="role" \
-  --field="role=approver" \
-  --project=YOUR_PROJECT_ID
+PYTHONPATH=. GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID uv run python -c "
+from google.cloud import firestore
+db = firestore.Client(project='YOUR_PROJECT_ID', database='customer-support-db')
+db.collection('users').document('demo-user-002').update({'role': 'approver'})
+"
 ```
 
 **Via the Firestore console:**
