@@ -70,6 +70,16 @@ declare -A APIS=(
   [agentregistry]="Agent Registry"
   [iap]="Identity-Aware Proxy"
   [iamcredentials]="IAM Credentials"
+  # firestore was missing from the codelab's reference API list entirely —
+  # not an oversight in copying it, the reference list simply never covered
+  # a customer database this agent depends on. Confirmed live: every
+  # search_products call (RAG vector search AND its keyword-search
+  # fallback, both Firestore queries) 403'd with "Egress request is not
+  # authorized... unregistered in the Agent Registry" until this was added
+  # and this script re-run — a real, silent product-search outage in the
+  # deployed engine that no local or CI test caught, since those all use a
+  # mocked Firestore client instead of this egress path.
+  [firestore]="Firestore"
 )
 
 REGISTERED=0

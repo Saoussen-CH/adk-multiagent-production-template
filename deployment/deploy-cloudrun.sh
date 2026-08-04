@@ -116,13 +116,19 @@ if [ -n "${MODEL_ARMOR_TEMPLATE_ID}" ]; then
   CLOUD_RUN_ENV_VARS+=",MODEL_ARMOR_TEMPLATE_ID=${MODEL_ARMOR_TEMPLATE_ID}"
 fi
 
+# --memory=1Gi, not the old 512Mi: confirmed live that a real chat request
+# OOM-killed a 512Mi instance mid-response ("Memory limit of 512 MiB
+# exceeded with 520 MiB used"), surfacing to the caller as a raw 503
+# "Service Unavailable" with no application-level error at all. The
+# cloudbuild/*.yaml pipelines already deploy at 1Gi; this script had
+# drifted behind them.
 gcloud run deploy $SERVICE_NAME \
   --image=$IMAGE_URL:latest \
   --region=$REGION \
   --platform=managed \
   --allow-unauthenticated \
   --set-env-vars="$CLOUD_RUN_ENV_VARS" \
-  --memory=512Mi \
+  --memory=1Gi \
   --cpu=1 \
   --timeout=300 \
   --max-instances=10 \

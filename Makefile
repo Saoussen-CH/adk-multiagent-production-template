@@ -356,8 +356,8 @@ deploy-agent-engine: ## Deploy agent to Vertex AI Agent Engine (use ENV=staging|
 	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))
 	set -a && . ./$(ENV_FILE) && set +a && PYTHONPATH=. $(PYTHON) deployment/deploy.py --action deploy
 
-deploy-cloud-run: ## Build and deploy backend to Cloud Run
-	bash deployment/deploy-cloudrun.sh
+deploy-cloud-run: ## Build and deploy backend to Cloud Run (use ENV=dev|staging|prod)
+	bash deployment/deploy-cloudrun.sh $(ENV)
 
 deploy-mcp-fedex: ## Deploy FedEx tracking MCP server to Cloud Run (FEDEX_MOCK=true|false; use ENV=staging|prod)
 	$(eval ENV_FILE := $(if $(ENV),.env.$(ENV),.env))

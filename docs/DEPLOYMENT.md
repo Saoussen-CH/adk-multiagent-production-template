@@ -283,7 +283,7 @@ install → lint + tool-tests → unit-tests → integration-tests
 Alternatively, deploy Cloud Run directly without CI/CD:
 
 ```bash
-make deploy-cloud-run
+make deploy-cloud-run ENV=dev
 ```
 
 Get the Cloud Run URL:
