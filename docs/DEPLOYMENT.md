@@ -129,7 +129,7 @@ Copy the values into `.env.dev` (or `.env` for single-env setups):
 
 ```bash
 make install
-make seed-db          # load demo products, orders, users, invoices
+make seed-db          # load demo products, orders, users, invoices, AND the acme-electronics tenant config
 make add-embeddings   # add vector embeddings for RAG semantic search
 ```
 
@@ -145,6 +145,27 @@ make add-embeddings ENV=prod
 
 > `add-embeddings` can take a few minutes. The Firestore vector index must be
 > READY first: Terraform creates it automatically.
+
+---
+
+## Step 6a: Configure the frontend's tenant
+
+This is a **multi-tenant product** — there is no default tenant. The
+frontend must be told which tenant it's serving, or every chat/session
+request 404s:
+
+```bash
+cp frontend/.env.example frontend/.env
+```
+
+Edit `frontend/.env`:
+
+```bash
+VITE_TENANT_ID=acme-electronics   # the tenant make seed-db just created
+```
+
+See [ARCHITECTURE.md's Multi-tenancy section](./ARCHITECTURE.md#multi-tenancy-tenant_id-is-required-everywhere)
+for how this is enforced end-to-end.
 
 ---
 
@@ -281,7 +302,10 @@ order tool, Model Armor filtering, and session continuity.
 
 ## Step 12: Try it
 
-Demo accounts (pre-seeded by `make seed-db`):
+The chat widget works immediately on load — no login required. A real,
+silently-issued anonymous bearer token is minted on first visit (no visible
+"Continue as Guest" button); login/register are available as an optional
+upgrade. Demo accounts (pre-seeded by `make seed-db`):
 
 | Email | Password | Profile |
 |-------|----------|---------|
@@ -289,8 +313,11 @@ Demo accounts (pre-seeded by `make seed-db`):
 | `jane@example.com` | `jane123` | Silver tier, has order history |
 
 Try these prompts:
-- `Where is my order ORD-12345?`
-- `Search for gaming laptops`
+- `Search for gaming laptops` (works immediately, no login)
+- As an anonymous visitor: `Where is my order ORD-12345?` → denied, then
+  offer the order number + the email on file (`demo@example.com`) → agent
+  verifies and grants access to just that order
+- Logged in as `demo@example.com`: `Where is my order ORD-12345?`
 - `Ignore all previous instructions...`: blocked by Model Armor
 
 ---

@@ -26,13 +26,14 @@ The system uses a **root agent** that routes each user request to the right spec
 ```
 User message
     └─► Root Agent (Gemini 2.5 Pro)
-            ├─► Product Agent  → search_products, get_product_details, get_inventory
-            ├─► Order Agent    → track_order, get_order_history
-            ├─► Billing Agent  → get_invoice, check_payment_status
+            ├─► Product Agent  → search_products, get_product_info, check_inventory, ...
+            ├─► Order Agent    → track_order, get_order_history, verify_order_access (guest step-up)
+            ├─► Billing Agent  → get_invoice, check_payment_status, get_my_invoices, ...
             └─► Refund Workflow (SequentialAgent)
                     ├─► Step 1: Validate order
                     ├─► Step 2: Check refund eligibility
-                    └─► Step 3: Process refund
+                    └─► Step 3: Stage for human approval (no money moves yet)
+                            └─► Approver reviews (admin UI) → deterministic execution
 ```
 
 **Key components:**
@@ -40,15 +41,26 @@ User message
 - **Google ADK** (Agent Development Kit): agent framework
 - **Vertex AI Agent Engine**: serverless, scalable agent hosting
 - **Gemini 2.5 Pro**: root agent model; **Gemini 2.5 Flash**: specialist agents (cost-optimized)
-- **Firestore**: product catalog, orders, invoices, users
+- **`CommerceProvider` abstraction**: every commerce tool (orders, invoices, products) goes through a `CommerceProvider` protocol, not raw Firestore calls directly — `FirestoreProvider` is the default implementation; a `ShopifyProvider` stub demonstrates plugging in a different commerce backend per tenant
+- **Multi-tenant by design**: every request carries a `tenant_id`; there's no default/implicit tenant. Each tenant resolves to its own Firestore database (or external provider). See [Multi-tenancy](#multi-tenancy-every-request-needs-a-tenant_id) below
+- **Firestore**: product catalog, orders, invoices, users — scoped per tenant
 - **RAG / Vector Search**: semantic product search using `text-embedding-004` (finds "gaming laptop" when user says "gaming computer")
 - **Memory Bank**: remembers user preferences across sessions
 - **Cloud Run**: React frontend + FastAPI backend
 - **Model Armor**: prompt injection and jailbreak protection
+- **Anonymous identity**: visitors get a real, silently-issued bearer token on first load (no visible "Continue as Guest" gate) — the same auth mechanism registered users use, never a self-declared/unverified ID
 - **Terraform**: all GCP infrastructure as code (APIs, IAM, Firestore, Artifact Registry, Cloud Build triggers)
 - **Cloud Build**: automated CI/CD pipeline with evaluation gating
 
 For full architecture details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+
+### Multi-tenancy: every request needs a `tenant_id`
+
+This is a multi-merchant product — there is no default tenant. `make seed-db` (below) automatically seeds one real tenant, `acme-electronics`, so local setup and demos work out of the box. The one thing you must set yourself is the frontend's `VITE_TENANT_ID` — see Step 4a below. Full design: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#multi-tenancy-tenant_id-is-required-everywhere).
+
+### Guest order verification (no account required)
+
+An anonymous visitor can still get help with a *specific* order: if a lookup fails because they're not logged in as that order's owner, the agent can ask for the order number + the email used to place it (`verify_order_access`). A match grants access to exactly that one order for the rest of the conversation — never a persistent credential, never broader account access, and capped at 3 failed attempts. Refunds and billing/payment tools are never reachable this way — only order status/tracking.
 
 ---
 
@@ -59,15 +71,20 @@ adk-multiagent-production-template/
 ├── customer_support_mas/        # Production package
 │   ├── agents/
 │   │   ├── root/                # Coordinator agent
-│   │   ├── product/             # Product agent + tools
-│   │   ├── order/               # Order agent + tools
-│   │   ├── billing/             # Billing agent + tools
-│   │   └── refund/              # Refund workflow + tools
-│   ├── callbacks.py             # Memory Bank callbacks
-│   ├── config.py                # Model and agent configuration
-│   ├── database/                # Firestore client + fixture data
-│   ├── safety/                  # Model Armor plugin
-│   └── services/                # RAG search
+│   │   ├── product/              # Product agent + tools
+│   │   ├── order/                # Order agent + tools (incl. guest order verification)
+│   │   ├── billing/              # Billing agent + tools
+│   │   └── refund/               # Refund workflow + tools (HITL staging/approval)
+│   ├── providers/                # CommerceProvider protocol, FirestoreProvider, ShopifyProvider stub
+│   ├── tenancy/                  # Tenant config resolution/caching (multi-tenant core)
+│   ├── callbacks.py              # Memory Bank callbacks
+│   ├── config.py                 # Model and agent configuration
+│   ├── auth.py                   # Ownership-check decorators
+│   ├── database/                 # Firestore client + fixture data (seeds the acme-electronics tenant)
+│   ├── safety/                   # Model Armor plugin
+│   └── services/                 # RAG search
+├── mcp_servers/
+│   └── fedex_tracking/           # Optional FedEx tracking MCP server (FastMCP), gated by MCP_FEDEX_URL
 ├── eval_wrappers/               # ADK eval CLI shims (not in production package)
 ├── frontend/                    # React/TypeScript UI
 ├── backend/                     # FastAPI backend (Cloud Run)
@@ -158,8 +175,24 @@ FIRESTORE_DATABASE=customer-support-db
 
 ```bash
 make setup-firestore    # creates the database (safe to run if it already exists)
-make seed-db            # loads products, orders, invoices, users
+make seed-db            # loads products, orders, invoices, users, and the acme-electronics tenant config
 ```
+
+### Step 5a: Configure the frontend tenant (required before using the chat UI)
+
+The frontend must know which tenant it's serving — there's no default. `make seed-db` seeds a tenant named `acme-electronics`; point the frontend at it:
+
+```bash
+cp frontend/.env.example frontend/.env
+```
+
+Edit `frontend/.env`:
+
+```bash
+VITE_TENANT_ID=acme-electronics
+```
+
+Without this, every chat/session request 404s (unknown tenant) — this is enforced, not just a convention. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#multi-tenancy-tenant_id-is-required-everywhere).
 
 ### Step 6: Test the agent locally
 
@@ -314,8 +347,9 @@ Once deployed, test the system with these queries in the chat UI or via `make te
 "I want a refund for order ORD-12345"
 → Step 1: Validate order ✓
 → Step 2: Check 30-day return window ✓
-→ Step 3: Process refund ✓
+→ Step 3: Staged for human approval (PENDING_APPROVAL — no money moves yet)
 ```
+The refund isn't executed here — a human approver reviews it in the admin UI (dual control: requester ≠ approver) before any deterministic execution happens.
 
 **4. Order tracking**
 ```
@@ -323,7 +357,15 @@ Once deployed, test the system with these queries in the chat UI or via `make te
 → Status, carrier, estimated delivery
 ```
 
-**5. Memory across sessions**
+**5. Guest order verification (no login)**
+```
+As an anonymous visitor: "Where is my order ORD-67890?"
+→ Denied (not your account) → agent asks for order number + email
+→ Provide the email on file for that order
+→ Access granted to that one order for the rest of this conversation
+```
+
+**6. Memory across sessions**
 ```
 Session 1: "I prefer detailed technical specs"
 Session 2: "Tell me about the keyboard"

@@ -154,8 +154,8 @@ graph TD
 
     subgraph "Domain Specialists"
         Product[Product Agent<br/>Model: Gemini 2.5 Flash<br/>8 Tools + PreloadMemoryTool]
-        Order[Order Agent<br/>Model: Gemini 2.5 Flash<br/>2 Tools + PreloadMemoryTool]
-        Billing[Billing Agent<br/>Model: Gemini 2.5 Flash<br/>3 Tools + PreloadMemoryTool]
+        Order[Order Agent<br/>Model: Gemini 2.5 Flash<br/>5 Tools incl. verify_order_access]
+        Billing[Billing Agent<br/>Model: Gemini 2.5 Flash<br/>6 Tools + PreloadMemoryTool]
     end
 
     subgraph "Workflow Patterns"
@@ -325,45 +325,60 @@ graph TB
     subgraph "Tools"
         T0[PreloadMemoryTool<br/>Load user memories]
         T1[track_order<br/>Track specific order]
-        T2[get_my_order_history<br/>Authenticated user orders]
+        T2[get_order_history<br/>Full history, authenticated]
+        T3[get_my_order_history<br/>Order summary, authenticated]
+        T4[get_order_details<br/>Specific order, authenticated]
+        T5[verify_order_access<br/>Order+email step-up, guest]
     end
 
     subgraph "Data Sources"
-        Firestore[(Firestore<br/>Orders Collection)]
+        Firestore[(CommerceProvider<br/>Orders)]
         Memory[(Memory Bank)]
     end
 
     Agent --> T0
     Agent --> T1
     Agent --> T2
+    Agent --> T3
+    Agent --> T4
+    Agent --> T5
 
     T0 --> Memory
     T1 --> Firestore
     T2 --> Firestore
+    T3 --> Firestore
+    T4 --> Firestore
+    T5 --> Firestore
 
     style Agent fill:#FBBC04,stroke:#F29900,color:#000,stroke-width:3px
     style T0 fill:#9334E6,stroke:#7627BB,color:#fff
     style T1 fill:#4285F4,stroke:#1967D2,color:#fff
     style T2 fill:#4285F4,stroke:#1967D2,color:#fff
+    style T3 fill:#4285F4,stroke:#1967D2,color:#fff
+    style T4 fill:#4285F4,stroke:#1967D2,color:#fff
+    style T5 fill:#EA4335,stroke:#C5221F,color:#fff
     style Firestore fill:#FF6F00,stroke:#E65100,color:#fff
     style Memory fill:#9334E6,stroke:#7627BB,color:#fff
 ```
 
 Full diagram: [`docs/diagrams/order-agent.mmd`](./diagrams/order-agent.mmd)
 
-**Role:** Order tracking and history
+**Role:** Order tracking and history, plus guest order verification
 
 **Model:** Gemini 2.5 Flash
 
 **Tools:**
 - `PreloadMemoryTool` - Loads user memories at session start
-- `track_order` - Track by order ID
-- `get_my_order_history` - Authenticated user's orders
+- `track_order` - Track by order ID (requires ownership, or a `verify_order_access` grant for that order)
+- `get_order_history` - Full order details for the authenticated user
+- `get_my_order_history` - Order summary for the authenticated user
+- `get_order_details` - Specific order details (requires ownership, or a grant)
+- `verify_order_access` - Order-number + email step-up for a visitor not logged in as the order's owner; on match, grants access to exactly that order for the rest of the conversation (capped at 3 failed attempts). See [Multi-tenancy](#multi-tenancy-tenant_id-is-required-everywhere) area of this doc's design spec pointer, and `customer_support_mas/auth.py`'s `allow_verified_grant` parameter — this grant is deliberately **not** accepted by billing/payment tools or refund tools.
 
 **Callback:** `auto_save_to_memory_sdk` - Saves conversations to Memory Bank
 
 **Features:**
-- Automatic user authentication
+- Automatic user authentication for the standard tools; a narrow, conversation-scoped fallback for unauthenticated visitors via `verify_order_access`
 - Memory-aware (past delivery issues)
 
 **File:** `customer_support_mas/agents/order/agent.py`
@@ -382,6 +397,8 @@ graph TB
         T1[get_invoice<br/>Get by invoice ID]
         T2[get_invoice_by_order_id<br/>Get by order ID]
         T3[check_payment_status<br/>Payment status check]
+        T4[get_my_invoices<br/>All invoices, authenticated]
+        T5[get_my_payments<br/>All payments, authenticated]
     end
 
     subgraph "Data Sources"
@@ -393,11 +410,15 @@ graph TB
     Agent --> T1
     Agent --> T2
     Agent --> T3
+    Agent --> T4
+    Agent --> T5
 
     T0 --> Memory
     T1 --> Firestore
     T2 --> Firestore
     T3 --> Firestore
+    T4 --> Firestore
+    T5 --> Firestore
 
     style Agent fill:#FBBC04,stroke:#F29900,color:#000,stroke-width:3px
     style Note fill:#EA4335,stroke:#C5221F,color:#fff
@@ -405,6 +426,8 @@ graph TB
     style T1 fill:#4285F4,stroke:#1967D2,color:#fff
     style T2 fill:#4285F4,stroke:#1967D2,color:#fff
     style T3 fill:#4285F4,stroke:#1967D2,color:#fff
+    style T4 fill:#4285F4,stroke:#1967D2,color:#fff
+    style T5 fill:#4285F4,stroke:#1967D2,color:#fff
     style Firestore fill:#FF6F00,stroke:#E65100,color:#fff
     style Memory fill:#9334E6,stroke:#7627BB,color:#fff
 ```
@@ -420,8 +443,10 @@ Full diagram: [`docs/diagrams/billing-agent.mmd`](./diagrams/billing-agent.mmd)
 - `get_invoice` - Get by invoice ID
 - `get_invoice_by_order_id` - Get by order ID
 - `check_payment_status` - Payment status
+- `get_my_invoices` - All invoices for the authenticated user
+- `get_my_payments` - All payment records for the authenticated user
 
-**Note:** Refunds are processed through the dedicated `refund_workflow` (SequentialAgent) for proper validation, not directly through billing_agent.
+**Note:** Refunds are processed through the dedicated `refund_workflow` (SequentialAgent) for proper validation, not directly through billing_agent. Billing/payment tools also never accept the order-verification grant from `verify_order_access` (Order Agent) — that grant unlocks order status/tracking for a verified guest, but never payment method, transaction id, or invoice detail, which still require true account ownership.
 
 **Callback:** `auto_save_to_memory_sdk` - Saves conversations to Memory Bank
 
@@ -558,22 +583,30 @@ All tools are organized by domain:
 - check_inventory
 - get_product_reviews
 
-### Order Tools (3 tools)
+### Order Tools (5 tools)
 **File:** `customer_support_mas/agents/order/tools.py`
 - track_order
 - get_order_history
 - get_my_order_history
+- get_order_details
+- verify_order_access (guest step-up: order number + email, never billing/refund)
 
 ### Billing Tools (6 tools)
 **File:** `customer_support_mas/agents/billing/tools.py`
 - get_invoice
 - get_invoice_by_order_id
 - check_payment_status
-- validate_order_id (used by refund_workflow)
-- check_refund_eligibility (used by refund_workflow)
-- process_refund (used by refund_workflow only)
+- get_my_invoices
+- get_my_payments
+- get_acceptable_refund_reasons (informational — delegates to `refund/tools.py`, tenant-scoped)
 
-**Note:** `process_refund` is not directly available to billing_agent. All refunds must go through the `refund_workflow` SequentialAgent for proper validation.
+### Refund Tools (used only by refund_workflow)
+**File:** `customer_support_mas/agents/refund/tools.py`
+- validate_refund_request
+- check_refund_eligibility
+- process_refund (stages a `PENDING_APPROVAL` request — never executes a refund directly)
+
+**Note:** `process_refund` is not available to billing_agent or any other agent directly. All refunds must go through the `refund_workflow` SequentialAgent, and even then only *stage* a request — a human approver must act on it before deterministic code executes anything.
 
 ## RAG Search
 
@@ -625,7 +658,12 @@ product_id = tool_context.state.get('last_product_id')
 
 ## Database Schema
 
-### Firestore Collections
+### Firestore Collections (per-tenant database)
+
+Every collection below lives inside **one named Firestore database per tenant**
+(see [Multi-tenancy](#multi-tenancy-tenant_id-is-required-everywhere) above) —
+not a single shared database. `acme-electronics`'s data lives in the
+`customer-support-db` database; a different tenant would resolve to its own.
 
 ```
 products/
@@ -656,7 +694,19 @@ sessions/
   ├── user_id: user123
   ├── messages: [...]
   └── ...
+
+tenants/
+  ├── id: acme-electronics
+  ├── provider_type: "firestore"
+  ├── provider_config: {database_id: "customer-support-db"}
+  └── refund_policy/  (subcollection: tenants/{tenant_id}/refund_policy/{version})
 ```
+
+The `tenants/` collection itself lives in a separate control-plane database
+(see `customer_support_mas/tenancy/config.py`), resolved once per request via
+`load_tenant_config(tenant_id)` before anything else runs. See
+[DATA_MODEL.md](./DATA_MODEL.md) for the full data model including the
+guest order-verification grant.
 
 ## Security
 
@@ -808,7 +858,7 @@ customer_support_mas/
 ├── config.py                # Agent configurations (models, names)
 ├── callbacks.py             # Memory Bank callbacks (auto_save_to_memory)
 ├── validation.py            # Shared input validation
-├── auth.py                  # Authentication helpers
+├── auth.py                  # Ownership-check decorators (incl. allow_verified_grant)
 ├── agents/
 │   ├── root/
 │   │   └── agent.py         # Coordinator — routes to specialist agents
@@ -817,16 +867,24 @@ customer_support_mas/
 │   │   └── tools.py         # search_products, get_product_info, etc.
 │   ├── order/
 │   │   ├── agent.py         # Order specialist
-│   │   └── tools.py         # track_order, get_my_order_history
+│   │   └── tools.py         # track_order, get_my_order_history, verify_order_access (guest step-up)
 │   ├── billing/
 │   │   ├── agent.py         # Billing specialist
 │   │   └── tools.py         # get_invoice, check_payment_status, etc.
 │   └── refund/
 │       ├── agent.py         # Sequential refund workflow (3-step validation)
 │       └── tools.py         # check_if_refundable, process_refund, etc.
+├── providers/                # CommerceProvider abstraction — every commerce tool goes through this, never raw Firestore
+│   ├── base.py               # CommerceProvider Protocol + domain models
+│   ├── firestore_provider.py # Default implementation
+│   ├── shopify_provider.py   # Stub for a non-Firestore commerce backend
+│   └── registry.py           # get_provider(tenant_id) — picks the implementation per tenant
+├── tenancy/                   # Multi-tenant core — tenant_id is required everywhere, never defaulted
+│   ├── config.py              # load_tenant_config(), TenantConfig, physical-isolation checks
+│   └── context.py             # get_tenant_id(tool_context) — reads tenant_id from ADK session state
 ├── database/
 │   ├── client.py            # Firestore client
-│   └── fixtures.py          # Demo seed data + seeding script
+│   └── fixtures.py          # Demo seed data + seeds the acme-electronics tenant
 ├── safety/
 │   ├── model_armor_plugin.py
 │   └── safety_util.py

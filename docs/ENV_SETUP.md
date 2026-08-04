@@ -37,7 +37,7 @@ FRONTEND_URL=http://localhost:3000
 PORT=8000
 ```
 
-### Frontend `.env` (Optional for React frontend)
+### Frontend `.env` (required — `VITE_TENANT_ID` is not optional)
 
 **Location:** `/customer-support-mas/frontend/.env`
 
@@ -48,7 +48,17 @@ PORT=8000
 **Variables:**
 ```bash
 VITE_API_URL=http://localhost:8000
+VITE_TENANT_ID=acme-electronics
 ```
+
+`VITE_TENANT_ID` identifies which merchant/tenant this frontend build serves
+— there is no default tenant anywhere in the backend, so every chat/session
+request carries it, and an unrecognized value gets rejected outright (a
+generic `401`, not a `404`, so an unauthenticated caller can't use it to
+enumerate tenants — see `unknown_tenant_error_for()` in
+`backend/app/main.py`). `make seed-db` seeds a real tenant named
+`acme-electronics` by default, so that's the value to use for local
+development. See [ARCHITECTURE.md's Multi-tenancy section](./ARCHITECTURE.md#multi-tenancy-tenant_id-is-required-everywhere).
 
 ## Environment Variables Reference
 

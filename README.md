@@ -32,7 +32,9 @@ For live demo scenarios and test data reference: [docs/TESTING_SCENARIOS.md](./d
 - **Frontend:** React/TypeScript on Cloud Run
 - **Backend:** FastAPI + Cloud Proxy on Cloud Run
 - **AI Layer:** Vertex AI Agent Engine with multi-agent orchestration
-- **Data Layer:** Firestore with vector search, Memory Bank for cross-session memory
+- **Data Layer:** Firestore with vector search, Memory Bank for cross-session memory — accessed only through a `CommerceProvider` abstraction, never raw Firestore calls in agent tools
+
+Multi-tenant by design: every request carries a `tenant_id`, resolved to a per-tenant Firestore database (or, via `ShopifyProvider`, a different commerce backend entirely) — there is no default/implicit tenant anywhere in the system.
 
 For full details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 
@@ -54,6 +56,9 @@ For full details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 | Infrastructure as Code | Terraform | Multi-environment (dev/staging/prod) with GCS remote state |
 | Resilience | Circuit breaker + exponential backoff | Protects Agent Engine calls: CLOSED/OPEN/HALF_OPEN, 5-failure threshold, 1s→60s retry |
 | External Integrations | FedEx tracking via MCP server + Agent Gateway egress | Read-only tool, mock mode for dev, credentials never in agent code |
+| Multi-Tenant Architecture | `CommerceProvider` protocol (Firestore default, Shopify stub) | Per-tenant Firestore database or external backend; `tenant_id` required on every request, no default tenant |
+| Anonymous Identity | Silently-issued bearer token, no visible guest gate | Same auth mechanism as registered users — no self-declared/unverified identity anywhere |
+| Guest Order Verification | Order number + email step-up (`verify_order_access`) | Grants access to exactly one order for the conversation; 3-attempt cap; never unlocks billing/payment or refunds |
 
 ---
 

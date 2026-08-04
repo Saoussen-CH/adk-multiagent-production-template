@@ -1,5 +1,13 @@
 # Prerequisites and Setup Guide
 
+> **This is a manual/reference appendix, not the recommended setup path.**
+> The canonical setup flow is Terraform-based and covers all of this
+> automatically, per environment — follow
+> [DEPLOYMENT.md](./DEPLOYMENT.md) or [GETTING_STARTED.md](../GETTING_STARTED.md)
+> instead. Use this doc only if you want to understand exactly which APIs,
+> roles, and resources Terraform creates, or need to replicate a piece of it
+> manually outside Terraform.
+
 Complete guide for setting up GCP resources, APIs, IAM permissions, and dependencies before deploying the multi-agent customer support system.
 
 

@@ -59,12 +59,24 @@ This document contains testing scenarios for demonstrating the Multi-Agent Custo
 
 ### Test 1.2: Guest Access
 **Steps:**
-1. Navigate to the login screen
-2. Click "Continue as Guest"
-3. Send message: "Hello, I need help"
-4. Verify agent responds
+1. Open the chat widget — no login screen blocks it, there is no "Continue as Guest" button anymore
+2. Send message: "Hello, I need help" immediately
+3. Verify agent responds
 
-**Expected:** Guest user can access the system without an account.
+**Expected:** A real, silently-issued anonymous bearer token was minted on load (same auth mechanism as registered users, just no visible gate). Login/register are reachable as an optional "Sign in" upgrade, never a blocker.
+
+---
+
+### Test 1.3: Guest Order Verification (order number + email)
+**Steps:**
+1. As the anonymous session from Test 1.2, send: "Where is my order ORD-67890?"
+2. Verify the agent denies direct access (not your account) and asks for the order number + the email used to place it
+3. Provide: order `ORD-67890`, email `demo@example.com`
+4. Verify the agent confirms verification and now answers the tracking question for that order
+5. Try again with the wrong email for a different order — verify the response is identical in shape/wording to a nonexistent order (no way to tell "wrong email" from "order doesn't exist")
+6. Fail 3 times in the same conversation — verify the 4th attempt is refused without even querying the order data
+
+**Expected:** Verification grants access to exactly that one order, for this conversation only — never billing/payment details, never a refund, never any other order.
 
 ---
 
@@ -152,16 +164,17 @@ This document contains testing scenarios for demonstrating the Multi-Agent Custo
 
 ## Feature 6: Refund Processing (Sequential Workflow)
 
-### Test 6.1: Successful Refund
+### Test 6.1: Refund Staged for Approval
 **Steps:**
 1. Send: "I want a refund for order ORD-67890"
 2. Observe 3-step workflow:
    - Step 1: Order validation
    - Step 2: Eligibility check (delivered 5 days ago, within 30-day window)
-   - Step 3: Refund processed
-3. Verify success message
+   - Step 3: Staged as `PENDING_APPROVAL` in `refund_requests` — no money moves yet
+3. Verify the agent's message says the request was submitted for approval, not that a refund was issued
+4. (Optional, to see the full loop) As an approver, open the admin UI and approve the request — verify only then does a `refunds` record get created
 
-**Expected:** SequentialAgent processes all 3 steps and confirms the refund.
+**Expected:** SequentialAgent processes all 3 validation steps and stages the request; deterministic execution only happens after a human approver acts on it (dual control: requester ≠ approver).
 
 ---
 
@@ -282,8 +295,9 @@ This document contains testing scenarios for demonstrating the Multi-Agent Custo
 | 6 | Multi-Session | Test 7.1 - New Chat | 2 min |
 | 7 | Memory Bank | Test 8.1 - Preferences | 2.5 min |
 | 8 | Multi-Agent | Test 9.2 - Complex Request | 2 min |
+| 9 (optional) | Guest Order Verification | Test 1.3 - Order + Email Step-Up | 2 min |
 
-**Total: ~15 minutes**
+**Total: ~15 minutes** (~17 with the optional guest-verification scenario)
 
 ---
 

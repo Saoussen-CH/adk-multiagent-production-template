@@ -6,6 +6,14 @@ This document describes the database seeding and user data model for the custome
 
 The system distinguishes between **global data** (accessible by everyone) and **user-specific data** (linked to individual user accounts).
 
+**Multi-tenancy note:** every collection described below lives inside one
+named Firestore database **per tenant** — there is no shared/default
+database. This doc describes the shape of the data within a tenant (using
+the seeded `acme-electronics` tenant as the example); see
+[ARCHITECTURE.md's Multi-tenancy section](./ARCHITECTURE.md#multi-tenancy-tenant_id-is-required-everywhere)
+for how `tenant_id` resolution, isolation, and the `CommerceProvider`
+abstraction work across tenants.
+
 ## Data Categories
 
 ### Global Data (Public Catalog)
@@ -67,32 +75,44 @@ Users who register through the portal start with:
 
 ### 3. Anonymous Users
 
-Users who don't register can:
+Every visitor — even one who never registers — is issued a real, silently-granted
+bearer token on first load (no visible "Continue as Guest" gate; see
+`backend/app/main.py`'s `POST /api/auth/anonymous` and
+`frontend/src/contexts/AuthContext.tsx`). There is no unauthenticated path
+anywhere in this system: an anonymous user is a real account, just one with
+no order/billing history of its own.
+
+Anonymous users can:
 - Browse products
 - Search catalog
 - View product details, inventory, reviews
+- **Verify and access one specific order** by proving the order number + the
+  email used to place it (`verify_order_access`, capped at 3 failed
+  attempts) — grants order status/tracking for exactly that order, for the
+  rest of the conversation. See `customer_support_mas/agents/order/tools.py`.
 
-Cannot:
-- Track orders
-- View invoices
-- Request refunds
-- Access any user-specific features
+Cannot (even after verifying an order):
+- View that order's invoice or payment details (`allow_verified_grant=False`
+  on the billing tools — a weaker bar than account ownership should not
+  unlock payment method/transaction id)
+- Request a refund (refund tools never accept this grant at all)
+- Access any *other* order or any account-wide history
 
 ## Data Access Matrix
 
 ```
-+------------------+---------------+---------------+---------------+
-|    Data Type     |  Demo User    |   New User    |  Anonymous    |
-+------------------+---------------+---------------+---------------+
-| Products         |      Yes      |      Yes      |      Yes      |
-| Inventory        |      Yes      |      Yes      |      Yes      |
-| Reviews          |      Yes      |      Yes      |      Yes      |
-+------------------+---------------+---------------+---------------+
-| Orders           | 3 pre-seeded  |     None      |      No       |
-| Invoices         | 3 pre-seeded  |     None      |      No       |
-| Payments         | 3 pre-seeded  |     None      |      No       |
-| Refund Eligibility| 3 pre-seeded |     None      |      No       |
-+------------------+---------------+---------------+---------------+
++-------------------+---------------+---------------+---------------------------+
+|    Data Type      |  Demo User    |   New User    |  Anonymous / Unverified   |
++-------------------+---------------+---------------+---------------------------+
+| Products          |      Yes      |      Yes      |           Yes             |
+| Inventory         |      Yes      |      Yes      |           Yes             |
+| Reviews           |      Yes      |      Yes      |           Yes             |
++-------------------+---------------+---------------+---------------------------+
+| Orders            | 3 pre-seeded  |     None      | One, if order+email match |
+| Invoices          | 3 pre-seeded  |     None      |            No             |
+| Payments          | 3 pre-seeded  |     None      |            No             |
+| Refund Eligibility| 3 pre-seeded  |     None      |            No             |
++-------------------+---------------+---------------+---------------------------+
 ```
 
 ## How User-Data Linking Works
@@ -202,9 +222,18 @@ def get_my_orders(tool_context: ToolContext, _user_id: str = None):
 
 | Decorator | Purpose | Injected Data |
 |-----------|---------|---------------|
-| `@requires_order_ownership` | Verify user owns the order | `_order_data`, `_order_id` |
+| `@requires_order_ownership` | Verify user owns the order — OR that the order is in `tool_context.state["verified_order_ids"]` (a grant earned via `verify_order_access`) | `_order_data`, `_order_id` |
 | `@requires_invoice_ownership` | Verify user owns the invoice | `_invoice_data`, `_invoice_id` |
 | `@requires_authenticated_user` | Ensure user is logged in | `_user_id` |
+
+`@requires_order_ownership` takes an `allow_verified_grant` keyword
+(default `True`) — order tools accept the conversation-scoped verification
+grant as an alternate path to ownership; billing tools
+(`get_invoice_by_order_id`, `check_payment_status`) explicitly pass
+`allow_verified_grant=False` so a guest who only proved order+email can
+never reach payment or invoice detail. Refund tools use the standalone
+`verify_order_ownership()` helper (below) and never pass the grant at all —
+excluded from this alternate path entirely.
 
 ### Tools with Ownership Verification
 
