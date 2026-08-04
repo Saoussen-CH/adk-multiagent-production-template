@@ -93,6 +93,22 @@ ORDER_TRACKING_HANDOFFS_CASES = [
             "Show me all my orders",
         ],
     },
+    {
+        # An anonymous/guest visitor (owns no orders) asks about a specific
+        # order they don't own, gets denied, then proves order number +
+        # email (verify_order_access) and should get an answer for that
+        # one order. ORD-67890 belongs to demo-user-001, whose seeded email
+        # is demo@example.com (see docs/DATA_MODEL.md). Exercises the
+        # guest-order-verification flow added in
+        # docs/superpowers/specs/2026-08-03-anonymous-identity-and-order-verification-design.md,
+        # which had zero eval coverage before this case.
+        "eval_id": "anonymous_guest_order_verification",
+        "user_id": "eval-anon-guest",
+        "prompts": [
+            "Where is my order ORD-67890?",
+            "The order number is ORD-67890 and my email is demo@example.com",
+        ],
+    },
 ]
 
 # --- 2.3 Billing Handoffs ---
@@ -315,7 +331,25 @@ SUITE_REGISTRY = {
 
 
 def apply_mocks():
-    """Apply the same Firestore + RAG mocks used by the test suite."""
+    """Apply the same Firestore + RAG mocks used by the test suite.
+
+    Kept in sync with tests/unit/conftest.py's mock_backends fixture, which
+    is the source of truth for what actually needs patching post-
+    CommerceProvider-migration (Tasks 4-7). This function had drifted:
+    six of its patches (agents.{product,order,billing}.tools.db_client,
+    services.rag_search._rag_search, agents.product.tools.get_rag_search,
+    agents.product.tools.USE_RAG) targeted module attributes that no longer
+    exist at all — every tool resolves data through get_provider(tenant_id)
+    now, not module-level db_client/RAG references — so patch.start() on
+    them raised AttributeError immediately, meaning this script could not
+    run at all since that migration. Found and fixed while adding the
+    anonymous guest order-verification eval case below; the two patches
+    that actually matter (providers.firestore_provider.get_db_client,
+    tenancy.config.get_db_client) were the ones missing, which would have
+    made get_provider()/load_tenant_config() silently fall through to REAL
+    Firestore instead of this mock — not merely "harmless dead weight" as
+    a since-corrected comment here used to claim.
+    """
     from tests.mock_firestore import MockFirestoreClient
     from tests.mock_rag_search import MockRAGProductSearch
 
@@ -327,19 +361,16 @@ def apply_mocks():
         patch("customer_support_mas.database.get_db_client", return_value=mock_db),
         patch("customer_support_mas.database.client.get_db_client", return_value=mock_db),
         patch("customer_support_mas.database.client.db_client", mock_db),
-        patch("customer_support_mas.agents.product.tools.db_client", mock_db),
-        patch("customer_support_mas.agents.order.tools.db_client", mock_db),
-        patch("customer_support_mas.agents.billing.tools.db_client", mock_db),
         # refund/tools.py no longer imports a module-level db_client (Task 6)
-        # — see tests/unit/conftest.py's mock_backends for the up-to-date
-        # pattern. NOTE: the product/order/billing db_client patches above
-        # are already stale from Tasks 4/5 — pre-existing, out of scope here.
+        # — it resolves its Firestore handle per-call via
+        # get_provider(tenant_id)._db, which itself goes through
+        # get_db_client, patched below.
+        patch("customer_support_mas.providers.firestore_provider.get_db_client", return_value=mock_db),
+        patch("customer_support_mas.tenancy.config.get_db_client", return_value=mock_db),
         patch("customer_support_mas.services.rag_search.RAGProductSearch", MockRAGProductSearch),
-        patch("customer_support_mas.services.rag_search._rag_search", mock_rag),
+        patch.dict("customer_support_mas.services.rag_search._rag_search_instances", {"customer-support-db": mock_rag}),
         patch("customer_support_mas.services.rag_search.get_rag_search", return_value=mock_rag),
         patch("customer_support_mas.services.get_rag_search", return_value=mock_rag),
-        patch("customer_support_mas.agents.product.tools.get_rag_search", return_value=mock_rag),
-        patch("customer_support_mas.agents.product.tools.USE_RAG", True),
     ]
 
     class MockContext:

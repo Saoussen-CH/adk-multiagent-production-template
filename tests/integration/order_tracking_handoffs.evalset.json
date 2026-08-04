@@ -6,7 +6,7 @@
       "eval_id": "track_multiple_orders",
       "conversation": [
         {
-          "invocation_id": "e-0837b3df-2072-4f71-a8e9-738308294d3a",
+          "invocation_id": "e-34c056b7-9393-4586-be70-e295265a7d03",
           "user_content": {
             "parts": [
               {
@@ -18,7 +18,8 @@
           "final_response": {
             "parts": [
               {
-                "text": "Here are the details for your order ORD-12345:\n\n**Status:** In Transit\n**Estimated Delivery:** January 20, 2025\n**Carrier:** FastShip\n**Tracking Number:** FS789456123\n\n**Items Ordered:**\n*   1 x ProBook Laptop 15 ($999.99)\n*   1 x Wireless Headphones Pro ($199.99)\n\n**Shipping Address:**\n123 Main St, San Francisco, CA 94102, USA\n\n**Order Timeline:**\n*   January 15, 2025: Order placed\n*   January 16, 2025: Processing complete\n*   January 17, 2025: Shipped\n*   January 18, 2025: In transit\n\nLet me know if you need any other information about this order!\n"
+                "text": "Your order **ORD-12345** is currently **In Transit**. \n\nHere are the tracking details:\n* **Carrier:** FastShip\n* **Tracking Number:** `FS789456123`\n* **Estimated Delivery:** January 20, 2025\n\n**Timeline:**\n* **Jan 18, 2025:** In transit\n* **Jan 17, 2025:** Shipped\n* **Jan 16, 2025:** Processing complete\n* **Jan 15, 2025:** Order placed",
+                "thought_signature": "AY89a1-OTQET0Y1sUohx2WH0I4H9Kg3pM_HZewIM-YZZdXlDOuLiI0zh9AesPS_zJR-_VRXIXWXg2pE3bpg-ND6jAiPbaIij36VjdvK24FjU0JdqF8NuviWY0YhTkGyWFWzcP26F6ctAWx5qqcM4TpukVw-W2Un4I8MTxEfTckn_oxPHQRbH59sly1-CnyVTkw_Q2rf7iYUg_XcHC4vAv36-O6vxozq57zlpBxIZTihvSWFIcNcqguuTO_0l1yE12WgH3A=="
               }
             ],
             "role": "model"
@@ -31,13 +32,13 @@
                   "parts": [
                     {
                       "function_call": {
-                        "id": "adk-923be977-f3c7-4656-92f1-709e425f243e",
+                        "id": "ixfnntae",
                         "args": {
-                          "request": "order ORD-12345"
+                          "request": "Where is order ORD-12345?"
                         },
                         "name": "order_agent"
                       },
-                      "thought_signature": "CuQCAY89a197B-PXaADdHEFaVZclZy9sqptVV-SaZE7gk7IMKjG_02XQS-uAslN68qdwcbaEWT2Jj-crktL--cr_GTKqRknTJIu7nyh6l7rQHocvf-fzrRNzVtGkBzzDhweUXGvuQw19EyS_5H28B1HiM7j3gYFG6DRy5nhgb6KbWXlDob4D7J1acybcj3TOY8GSmLCySnfcLumQmnzSEP8NGkclYvnHwiJ_qIJ508d8kVYOHbGR2Mj3mCaZptfppKGzNyhb_9-T3U3-Nm5YjNF4GzqRRRINGbRhnHf-UDBsWkeGLaSB8-sWiS9IRRnCgS3gyONMw17QDqsk83yc4_Rb0UeWwMz90iCTA3IQs0MEmV6lYwZGcSCVHsAswlkB_7OZMXUERNqme8jEER2s5dA9RTXvV1tInwmQrotdrP-lU_TcuHZHEfNKshdNTbbQSMFVW7Mhxi6xnkP5U9l0xW6vQA7m_-0="
+                      "thought_signature": "AY89a1-Naqhaac4bthtos_-zcJRI4Q4owvBvmbr4L1prpX6NvqvMsFKpq72Q4OhPODP6siBqaABcS7-IU_wlA3MlDK0-G-cFXb24aFzze8Nz-jDnrga7viwoOKcWPSwwqSDfq-_Es7_B-rEay_QAAysoLP-Mhfzm8lrACx-hRuo5w6pCqapWrxAc8t5u58baS0X3MylXOBSJCh06xHd7_22h7VAoVZk8_RA65dPL-qg1G3W0i8CsF544H8iEvB3gKQb3B7gvAnmzdyIo7fj_B6rLJah5KWoXmTHJXVEn_LdMR5fJpLydPMkEsrC7mw3hKatKn6IT8J1asDORXkBkJeXd5p1JKvMuClN20KhUyxZdb-QfjnJC_ag2tGziZ8EsG0TS_j5IH3t6nPoCCJc92OSqH_3B_jQfN1_F2JhiFFp2S36Zvpw7IjsghLYsIpEphWx4pO2j0xQP"
                     }
                   ],
                   "role": "model"
@@ -49,10 +50,10 @@
                   "parts": [
                     {
                       "function_response": {
-                        "id": "adk-923be977-f3c7-4656-92f1-709e425f243e",
+                        "id": "ixfnntae",
                         "name": "order_agent",
                         "response": {
-                          "result": "Here are the details for your order ORD-12345:\n\n**Status:** In Transit\n**Estimated Delivery:** January 20, 2025\n**Carrier:** FastShip\n**Tracking Number:** FS789456123\n\n**Items Ordered:**\n*   1 x ProBook Laptop 15 ($999.99)\n*   1 x Wireless Headphones Pro ($199.99)\n\n**Shipping Address:**\n123 Main St, San Francisco, CA 94102, USA\n\n**Order Timeline:**\n*   January 15, 2025: Order placed\n*   January 16, 2025: Processing complete\n*   January 17, 2025: Shipped\n*   January 18, 2025: In transit\n\nLet me know if you need any other information about this order!"
+                          "result": "Your order **ORD-12345** is currently **In Transit**. \n\nHere are the tracking details:\n* **Carrier:** FastShip\n* **Tracking Number:** `FS789456123`\n* **Estimated Delivery:** January 20, 2025\n\n**Timeline:**\n* **Jan 18, 2025:** In transit\n* **Jan 17, 2025:** Shipped\n* **Jan 16, 2025:** Processing complete\n* **Jan 15, 2025:** Order placed"
                         }
                       }
                     }
@@ -62,10 +63,10 @@
               }
             ]
           },
-          "creation_timestamp": 1770491837.504169
+          "creation_timestamp": 1785849323.8384178
         },
         {
-          "invocation_id": "e-eedec8ac-2c06-410e-b7c9-d3958ddb9217",
+          "invocation_id": "e-929915e2-708a-4d1e-8f11-6a6e9191487a",
           "user_content": {
             "parts": [
               {
@@ -77,7 +78,8 @@
           "final_response": {
             "parts": [
               {
-                "text": "This order (ORD-67890) was placed on January 5, 2026, and delivered on January 10, 2026.\n\nIt contained:\n*   1 x Wireless Headphones Pro ($199.99)\n\nThe total for the order was $215.99 (including $16 tax). It was shipped via QuickPost with tracking number QP456789012 to 123 Main St, San Francisco, CA, 94102, USA.\n"
+                "text": "Your order **ORD-67890** has been successfully delivered!\n\n**Delivery Details:**\n* **Status:** Delivered on **July 30, 2026**\n* **Carrier:** QuickPost\n* **Tracking Number:** `QP456789012`\n\n**Timeline:**\n* **July 25, 2026:** Order placed\n* **July 27, 2026:** Shipped\n* **July 30, 2026:** Delivered\n\nIf you haven't received it yet, please check around your delivery location or contact QuickPost with your tracking number. Let me know if you need anything else!",
+                "thought_signature": "AY89a1-iZAhSfWkw3zJ6ADnlhvGh9TGluVX7D3H_YhQETjulhWqleXwcAKSJcHGGUHcZJbF3CB1DB1IM_KGHozofotPIkqI2r1gyn4Y-nD_hMmuGQxCVLeUlIofUCgljd0ADN8aJ8Mdu8oLiHASf_ELoPdBEB95Y3Uaucbl-F0EnF_rS40O6Af4kM7ulxDIYklx_VMXxs2e64tdnEof7-skQsItxf0uEUD0yJ8jYVoIN1cenefJEGq6CIDKPyOcYg_uftPTNWnbEk67RelAqKrTE9MNt"
               }
             ],
             "role": "model"
@@ -90,13 +92,13 @@
                   "parts": [
                     {
                       "function_call": {
-                        "id": "adk-8a16a929-b73c-474d-bf74-c1d0a28bfea0",
+                        "id": "jz5wxyvg",
                         "args": {
-                          "request": "order ORD-67890"
+                          "request": "Where is order ORD-67890?"
                         },
                         "name": "order_agent"
                       },
-                      "thought_signature": "CvgCAY89a1-rrFmPhJdiJLA1j4TyHdUVtxU2REfFCnBjBbrgVqPwPdwD2-aE6cly4FDRW_KFrpUxqRTyBwnP8m-LE_O-aniL1VAtrY66A5z-Hfe8zbQ0qqtelpTjyqrpozOmM37JRnviyugESnfP96MMBbU4vC-SLLJpcnFLuQN8NDexTUaVl5DNtBHPQ3hUftAedgtwjXDNNu7GRzjNz8k1tFZBY8yQeH5w_LzeUC2hoJc2B699E_TdlNFAnY0sglK1nvZsLjb5udGjVAh6gO88iC-UGapy7vw2TbijhEZjQWHNIXxPSLapw77aleqGx4WsBZoeWKZsHf_6OJLg08FHj2W22phW0sYhWDjW5I0bLD3imZZB7HpFbdeZmRL2G6Wx_InKymeQvW5vJSdge9SwvZ2rLI_lX_4PQpXiCkMU0h7cbMtfH_3AFkBwxfjMHn8I2Ig2a4sND3GjVqKZvMBQN9jHaszjAWxflDYzbvs4Sdh4AqqmgIb2Zw=="
+                      "thought_signature": "AY89a18ibAq5RGEUe-ynkEJq4USAp-6DlE2aZLU-7lNHEYSwFIAof0bubmHc4dYgAtSWECUakPZRF5ESQfC6HfiAdeTTgrNcXumuU0n5v8C7wjR9BPz3od8V5TUWNSyOXAY_1A4DUJTIBqg0L-PLe6HXz9JTyeMCif-x70HTAoQq5C6CjXEaIcr2uCSCtrQNiQ-ZZwRzNGdhqVcNKwIolbp83ln91-CDEEP6I_Sb317yQZFmYzMD1dEJJBUKZXYybMax3eFvrFli09yXTrWsMH-i38Snp9jLwhCB0wWMVa-lcQyLUVMhuUWs8hSa"
                     }
                   ],
                   "role": "model"
@@ -108,10 +110,10 @@
                   "parts": [
                     {
                       "function_response": {
-                        "id": "adk-8a16a929-b73c-474d-bf74-c1d0a28bfea0",
+                        "id": "jz5wxyvg",
                         "name": "order_agent",
                         "response": {
-                          "result": "This order (ORD-67890) was placed on January 5, 2026, and delivered on January 10, 2026.\n\nIt contained:\n*   1 x Wireless Headphones Pro ($199.99)\n\nThe total for the order was $215.99 (including $16 tax). It was shipped via QuickPost with tracking number QP456789012 to 123 Main St, San Francisco, CA, 94102, USA."
+                          "result": "Your order **ORD-67890** has been successfully delivered!\n\n**Delivery Details:**\n* **Status:** Delivered on **July 30, 2026**\n* **Carrier:** QuickPost\n* **Tracking Number:** `QP456789012`\n\n**Timeline:**\n* **July 25, 2026:** Order placed\n* **July 27, 2026:** Shipped\n* **July 30, 2026:** Delivered\n\nIf you haven't received it yet, you may want to check around your delivery location or contact QuickPost with your tracking number. Let me know if you need anything else!"
                         }
                       }
                     }
@@ -121,10 +123,10 @@
               }
             ]
           },
-          "creation_timestamp": 1770491856.553733
+          "creation_timestamp": 1785849333.8797276
         },
         {
-          "invocation_id": "e-2761160f-10cf-4927-8001-9dfcc7b47a7c",
+          "invocation_id": "e-ff0df21a-d3e6-4ee4-b9e2-ace07da6d73c",
           "user_content": {
             "parts": [
               {
@@ -136,7 +138,8 @@
           "final_response": {
             "parts": [
               {
-                "text": "Here's a summary of all your orders:\n\n*   **Order ID:** ORD-12345\n    *   **Date:** 2025-01-15\n    *   **Total:** $1295.98\n    *   **Status:** In Transit\n*   **Order ID:** ORD-67890\n    *   **Date:** 2026-01-05\n    *   **Total:** $215.99\n    *   **Status:** Delivered\n*   **Order ID:** ORD-11111\n    *   **Date:** 2025-11-26\n    *   **Total:** $485.99\n    *   **Status:** Delivered\n\nWould you like more details on any specific order, or perhaps full details of all your orders?\n"
+                "text": "Here is a summary of your recent orders:\n\n1. **Order ID:** ORD-67890\n   * **Date:** July 25, 2026\n   * **Status:** Delivered\n   * **Total:** $215.99\n\n2. **Order ID:** ORD-11111\n   * **Date:** June 15, 2026\n   * **Status:** Delivered\n   * **Total:** $485.99\n\n3. **Order ID:** ORD-12345\n   * **Date:** January 15, 2025\n   * **Status:** In Transit\n   * **Total:** $1,295.98\n\nWould you like more details or tracking information for any of these orders?",
+                "thought_signature": "AY89a195f0cxtwNvakDU8Zjssx1LegSliPjGG9850dLHsu95fdk_WX4Oa9q92uO9TPt3HMhkceeh72PTygVrLidxoVKl_UdK-3E2GOjfP-BMVSLH-dJhyTN87QlwC-XUZFCRe0IUDBmFJwS-pP15H1HvhlkLOnvau3h1LocEGVqnf3xbg3wolm3YVUj_"
               }
             ],
             "role": "model"
@@ -149,13 +152,13 @@
                   "parts": [
                     {
                       "function_call": {
-                        "id": "adk-a33a891e-3d3a-46a5-b5d7-478fc2959ce1",
+                        "id": "az8fka1y",
                         "args": {
-                          "request": "all my orders"
+                          "request": "Show me all my orders"
                         },
                         "name": "order_agent"
                       },
-                      "thought_signature": "CqADAY89a1_MlM7uWI4rDNJgT3l8yATrUrw5RVknAXSR5vrEIOiZkSqRCNwhDxxxFaQleAvQcP7bIo2sNjKRNUc1_4VcISvgomqMKvqGOm_CPImz_e8qZp2bRbjA7B5w5aNMrEdtiC62-HR4eSBzumf_BR3vSIzDz0QwIyxt_mvlCJI3mGFZemiGnWHDh3iA1WuQwCeBW7jgtVigRip4ak31ChiliUHCjmnpj3Nncx9ZhHLrII-LT8fRQ7ynadsH1aQ-N3PaKE2peNWTePMbpO1JyT2l59xlzNyq8q8FUuZedw8gVbSiltKIsr473FRxZxbdKC05uRVTvpNaDhSSmEGud1KGmrETlXZqzKFwEcKJhN4yP_pz5qyivLn7-TOXh8zHIryMmFEOHwYaLosCHx9EngJEzzpoupPqFfFN4WsaMEtnxfOScuQYzTzAfWuPPj7LIkgOpNXfunX2wDvQsb4xTWymoI6Tr6yh_ZNQfyO6m0MUZ-S0rwHqm67jInS1abaGwpswCEnSkFWkhmDT-2ZzIW5Yadr46dxUxhIaAoC1Eb0="
+                      "thought_signature": "AY89a1-RleanIlOIXncLcaOGtUKah2Z-cM7gP3aW37DoLvLHuTp33fdT-_js-wdl14AmyjAclUZuAyynjscYNGsDlOsfhgMVcbePJxB7_mZoi0uhPaJMqmZ0f90AtAfHqjAH5J6PlQr2zWRJuhKxm9BYd0u6aWmpRIw7bgvIDsIPitW7mISdKIEkje7MsFkenFxyAY1VdAnfnWcwF-pe7bCD7TZc9LK-3xEYF9pKwI8hEg61qLckQjySZGsTCmc6j8Lb7RPBFyxSFdhXzI3JhA9thJcGNN-4nojzKHS8QjJCBfXxSM5mi7NYDkcBhhnFvZs="
                     }
                   ],
                   "role": "model"
@@ -167,10 +170,10 @@
                   "parts": [
                     {
                       "function_response": {
-                        "id": "adk-a33a891e-3d3a-46a5-b5d7-478fc2959ce1",
+                        "id": "az8fka1y",
                         "name": "order_agent",
                         "response": {
-                          "result": "Here's a summary of all your orders:\n\n*   **Order ID:** ORD-12345\n    *   **Date:** 2025-01-15\n    *   **Total:** $1295.98\n    *   **Status:** In Transit\n*   **Order ID:** ORD-67890\n    *   **Date:** 2026-01-05\n    *   **Total:** $215.99\n    *   **Status:** Delivered\n*   **Order ID:** ORD-11111\n    *   **Date:** 2025-11-26\n    *   **Total:** $485.99\n    *   **Status:** Delivered\n\nWould you like more details on any specific order, or perhaps full details of all your orders?"
+                          "result": "Here is a summary of your recent orders:\n\n1. **Order ID:** ORD-67890\n   * **Date:** July 25, 2026\n   * **Status:** Delivered\n   * **Total:** $215.99\n\n2. **Order ID:** ORD-11111\n   * **Date:** June 15, 2026\n   * **Status:** Delivered\n   * **Total:** $485.99\n\n3. **Order ID:** ORD-12345\n   * **Date:** January 15, 2025\n   * **Status:** In Transit\n   * **Total:** $1,295.98\n\nWould you like more details or tracking information for any of these orders?"
                         }
                       }
                     }
@@ -180,7 +183,7 @@
               }
             ]
           },
-          "creation_timestamp": 1770491874.9945192
+          "creation_timestamp": 1785849350.5791762
         }
       ],
       "session_input": {
@@ -190,8 +193,141 @@
           "tenant_id": "acme-electronics"
         }
       },
-      "creation_timestamp": 1770491874.9947646
+      "creation_timestamp": 1785849350.5795035
+    },
+    {
+      "eval_id": "anonymous_guest_order_verification",
+      "conversation": [
+        {
+          "invocation_id": "e-8014d37c-880d-4e5b-9e50-f838c69cfc55",
+          "user_content": {
+            "parts": [
+              {
+                "text": "Where is my order ORD-67890?"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "It looks like I don't have permission to access the details for order **ORD-67890**. \n\nCould you please provide the **email address** associated with this order so I can verify your access?",
+                "thought_signature": "AY89a18JmfdIoiEvWUMno6Va5dCK4VMkCi4DNYWIR57ckPOgAURGkWUp8IZyvaAPMr6D9YBZaSvZZHwjgrPGatLZEVg4vimwmSRmY7zfmWLbveGKmpHj3D2gfLAhpQneGNmakWzroJT3SO2jFnIKx6ayk2g7gyWJ1htfHWIKhPVGS6MojfcuAeRIEAf6AGDQ1kQhN9KI9beAXiwyaCLWbqNcAH-lyg0ddPeyUzN-9xuroh0krwVUhO1Ul5WqBce1I--reu8M8NqHUT4XnFznA4k="
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "invocation_events": [
+              {
+                "author": "customer_support",
+                "content": {
+                  "parts": [
+                    {
+                      "function_call": {
+                        "id": "xa1hsv1z",
+                        "args": {
+                          "request": "Where is my order ORD-67890?"
+                        },
+                        "name": "order_agent"
+                      },
+                      "thought_signature": "AY89a18OoJOmYnu1VuZ0kAsUD5YnxCs9Y6DpqZOA1hlvh-A7rCF6IFbv1_CnqBD6s-FyGy8kfOMUCZma17NdYKHaXmjUvDyQc0I6fQymTaEgQMujJ1H80WW2revqLiQdnshttPMmNT4bcgbnGH3NqUKmnP_Aul912uu6DMcLCg3vcSW2Eo_Kgj6XD7vGUcU49_T5T4Cjy6VNUEeQmlKarQoopWGpjcWENu9BvnADnGi8k14snfwMT7ZFeBb86gXtwhXtenVkEILhIT7E8yN12rXkaRkf4q_NRj6SpV5uZcgJlz1tdgf9xi_o94_ZPPezxf0Wx5q3MJr6IqefyytTnQP0zwl_s4DbBaIz875aGEWAJ36t0t9icbZ-vOO3Ajrif8262ElwKiaPofIFZNHSAOAMxJkqpjBg8ch64zDnqe2KVlOy_mN4e0F2POjtSoyu2UGjla53kXoe58B73OtP2VIUdiqB"
+                    }
+                  ],
+                  "role": "model"
+                }
+              },
+              {
+                "author": "customer_support",
+                "content": {
+                  "parts": [
+                    {
+                      "function_response": {
+                        "id": "xa1hsv1z",
+                        "name": "order_agent",
+                        "response": {
+                          "result": "It looks like I don't have permission to access the details for order **ORD-67890**. \n\nIf you placed this order, I can verify your access to it. Could you please provide the **email address** associated with order **ORD-67890**?"
+                        }
+                      }
+                    }
+                  ],
+                  "role": "user"
+                }
+              }
+            ]
+          },
+          "creation_timestamp": 1785849362.0775902
+        },
+        {
+          "invocation_id": "e-f8aa46a3-5601-4b9a-bbef-8144a651afbf",
+          "user_content": {
+            "parts": [
+              {
+                "text": "The order number is ORD-67890 and my email is demo@example.com"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Your order **ORD-67890** has been successfully delivered!\n\nHere are the tracking details:\n* **Status:** Delivered\n* **Delivery Date:** July 30, 2026\n* **Carrier:** QuickPost\n* **Tracking Number:** `QP456789012`\n\n**Timeline:**\n* **July 25, 2026:** Order placed\n* **July 27, 2026:** Shipped\n* **July 30, 2026:** Delivered",
+                "thought_signature": "AY89a19UygJM8cEmMYsmXshHvezSkNShCLSlP6AJjvpyUMPurv7sV3w0l9svutvvoI73BwFHLbAUjQL9GtBBpLcFxsGPR8fcx8GIfZYmAPJ8b_Muz_dXaDX2fHdzT8Bwxwp3wrXwajv42bqiQJNeGKXH4T7lkMfGA_MlESM7clVrnNeGwBhB5UwBa-isZLpOAqDcjJze7mF-7xcGbpEnCKGaeySEtMm6b-ciK3rbXH0vD_uZzdQTqzGdF48Fn18AslcafjHfd6FYcppBMoz9CHaiCkd1Zk81TasQJVjNtSAmPcYhxCdFPj8KXpyERD0Q5wrwcWiTHpsHVCt8guGfiYMTunyl8mNw9X6rJ-josOm6ElNG3nvHQk7FfVn8tCn5S7oP4t313HmV4gvQslKyuS4FaKs="
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "invocation_events": [
+              {
+                "author": "customer_support",
+                "content": {
+                  "parts": [
+                    {
+                      "function_call": {
+                        "id": "pn8nftyy",
+                        "args": {
+                          "request": "Where is my order ORD-67890? The email is demo@example.com"
+                        },
+                        "name": "order_agent"
+                      },
+                      "thought_signature": "AY89a18k59Ydj6K-WVVjdUnOBBmnfEYyLwyUfI3FdeUVs-9gLiMNUTxesDliB7OSoJ-SoYYVnpWmryWeG3yuokKlqnc9PisxDed37ULLUrj-NQWjFAx8waEfKs6JuiYi_jbH_x49AjD_qjfW5OlNYiQWFUnFSXS2qohsc0_nzFnt1iMChMpBZr4niWTq5MoZ8c3jSTrNXKnOJLbK7vp7BRB2WX655VGJsXszFXgTDaY1vnxXZABoz66u_uQuWFCgk5Uv9B_aSkmYZies2GkIKbaFubJsKWYey7MBdkrw3imbIr_1thCzNIDx2j-cPhrGDAJlLOTq2rqV"
+                    }
+                  ],
+                  "role": "model"
+                }
+              },
+              {
+                "author": "customer_support",
+                "content": {
+                  "parts": [
+                    {
+                      "function_response": {
+                        "id": "pn8nftyy",
+                        "name": "order_agent",
+                        "response": {
+                          "result": "Your order **ORD-67890** has been delivered! \n\nHere are the tracking details:\n* **Status:** Delivered\n* **Delivery Date:** July 30, 2026\n* **Carrier:** QuickPost\n* **Tracking Number:** `QP456789012`\n\n**Timeline:**\n* **July 25, 2026:** Order placed\n* **July 27, 2026:** Shipped\n* **July 30, 2026:** Delivered"
+                        }
+                      }
+                    }
+                  ],
+                  "role": "user"
+                }
+              }
+            ]
+          },
+          "creation_timestamp": 1785849376.274401
+        }
+      ],
+      "session_input": {
+        "app_name": "root_agent",
+        "user_id": "eval-anon-guest",
+        "state": {
+          "tenant_id": "acme-electronics"
+        }
+      },
+      "creation_timestamp": 1785849376.2746778
     }
   ],
-  "creation_timestamp": 1770491874.9947796
+  "creation_timestamp": 1785849376.2746985
 }

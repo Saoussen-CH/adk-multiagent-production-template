@@ -126,9 +126,8 @@ _CAP_EXCEEDED_RESPONSE = {
 # caps at 50/hour/IP — giving a real bound of <=150 guesses/hour/IP with no
 # new infrastructure.
 #
-# CAVEAT (per this repo's own rule of treating Agent Engine behavior as
-# unverified until tested live — see CLAUDE.md's "Reference docs mirror"
-# section): this has NOT been confirmed against the deployed
+# CAVEAT (Agent Engine behavior should be treated as unverified until
+# tested live): this has NOT been confirmed against the deployed
 # VertexAiSessionService. Its session resource only documents a single
 # `sessionState` field with no separate user-state concept, and
 # `get_user_state()` raises NotImplementedError with "The Vertex AI Agent

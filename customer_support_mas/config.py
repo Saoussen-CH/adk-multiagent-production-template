@@ -359,8 +359,25 @@ def get_model_with_retry(agent_key: str) -> Gemini:
     Use this instead of passing config["model"] (a plain string) directly to
     Agent(model=...), so transient API errors are retried with exponential
     backoff instead of failing the turn immediately.
+
+    client_kwargs={"location": "global"} overrides only the LLM client's
+    region (not GOOGLE_CLOUD_LOCATION / LOCATION above, which everything
+    else — Firestore, Cloud Run, Agent Engine — still uses). Needed for
+    gemini-3.5-flash specifically: confirmed live that it 404s
+    ("Publisher model ... was not found") when called against
+    us-central1 despite being listed as available there by
+    client.models.list(), but succeeds against the global endpoint —
+    Agent Platform docs/availability listings should be treated as
+    unverified until tested live; the docs page's own availability claim
+    was wrong for this project/region. Revisit (drop this override, or
+    make it conditional) if reverting to a model already confirmed to
+    work regionally, e.g. gemini-2.5-pro/flash.
     """
-    return Gemini(model=get_model_for_agent(agent_key), retry_options=LLM_RETRY_OPTIONS)
+    return Gemini(
+        model=get_model_for_agent(agent_key),
+        retry_options=LLM_RETRY_OPTIONS,
+        client_kwargs={"location": "global"},
+    )
 
 
 # =============================================================================

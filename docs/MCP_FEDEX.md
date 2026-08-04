@@ -218,9 +218,9 @@ behavior):
   read back from a real engine's own `spec.effective_identity`, is
   `agents.global.proj-PROJECT_NUMBER.system.id.goog` — `proj-`, not
   `project-`. Using the docs' literal string gets the IAM API to reject the
-  member as "of an unknown type." See `terraform/modules/core/iam.tf` and
-  `CLAUDE.md`. Both `ops/setup_agent_gateway.sh` and
-  `ops/register_agent_registry.sh` use the confirmed `proj-` form.
+  member as "of an unknown type." See `terraform/modules/core/iam.tf`.
+  Both `ops/setup_agent_gateway.sh` and `ops/register_agent_registry.sh`
+  use the confirmed `proj-` form.
 - **CAA opt-out env var**: `GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES`
   must be set as the **string** `"False"`, not a Python bool — the docs show
   a bool. Not directly exercised by this task's scripts, but it's the same
