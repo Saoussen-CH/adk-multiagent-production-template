@@ -53,6 +53,18 @@ is NOT equivalent to a real Firestore transaction under genuine concurrent
 callers (e.g. two API requests racing in separate processes). Wiring
 ``db.transaction()`` around this logic is deferred to when this module is
 pointed at real Firestore (tracked as follow-up, not silently dropped).
+
+A related but distinct gap — a *sequential* retry after a partial failure,
+not concurrent callers — is closed as of the claim/execute/finalize design
+in ``approve_refund`` below: previously, if ``provider.execute_refund()``
+succeeded but the final status-update write failed (a crash, a transient
+Firestore error), the request stayed ``PENDING_APPROVAL`` and a retry (or a
+confused approver re-clicking Approve) would call ``execute_refund()`` a
+second time — an actual double-refund, not just a display glitch. The
+status is now claimed (``APPROVING``) *before* ``execute_refund()`` runs,
+so a retry's fresh status read is refused by the same ``not_pending`` gate
+instead of racing past it. See ``find_stuck_approving()`` for the resulting
+(safe, non-double-refunding) failure mode this leaves to detect.
 """
 
 from __future__ import annotations
@@ -63,6 +75,7 @@ from typing import Any, Dict, List
 from customer_support_mas.providers.registry import get_provider
 
 PENDING_APPROVAL = "PENDING_APPROVAL"
+APPROVING = "APPROVING"
 APPROVED = "APPROVED"
 REJECTED = "REJECTED"
 EXPIRED = "EXPIRED"
@@ -130,6 +143,26 @@ def approve_refund(db, tenant_id: str, request_id: str, approver_id: str) -> Dic
     writing anything, so a retried/double-clicked approval raises
     ApprovalError("not_pending") on the second call instead of writing a
     second refund record.
+
+    Three-phase claim/execute/finalize, not a single execute-then-write:
+    provider.execute_refund() may be a real external call (a Shopify-backed
+    tenant's Refund API, eventually), so it cannot be wrapped in the same
+    Firestore transaction as the request-document write — there is no
+    atomic way to guarantee both succeed or both fail together. Without the
+    claim step, a caller that retried after execute_refund() succeeded but
+    the final status write failed (a crash, a transient Firestore error)
+    would re-enter this function, see status still PENDING_APPROVAL, and
+    call execute_refund() a SECOND time — a real double-refund, not just a
+    display glitch. The claim (PENDING_APPROVAL -> APPROVING) happens
+    BEFORE execute_refund() runs, so a retry's fresh status re-read sees
+    APPROVING and is refused by the not_pending gate instead of racing
+    past it. If execute_refund() itself fails, the claim is released back
+    to PENDING_APPROVAL so a human can retry cleanly — no money moved, safe
+    to undo. If only the final write (APPROVING -> APPROVED) fails, the
+    request is left in APPROVING: money HAS moved, the claim already
+    prevents a second execute_refund() call, so this is now a safe,
+    detectable inconsistency rather than a dangerous one — see
+    find_stuck_approving() below.
     """
     request = _get_request(db, tenant_id, request_id)
     doc_ref = db.collection(REFUND_REQUESTS_COLLECTION).document(request_id)
@@ -145,9 +178,10 @@ def approve_refund(db, tenant_id: str, request_id: str, approver_id: str) -> Dic
         raise ApprovalError("self_approval", "Approver cannot be the original requester")
 
     # Idempotency gate — re-read-and-check immediately before any write.
-    # No write happens between this check and the writes below, so this is
-    # the single point where a double-approve is caught (see module
-    # docstring for the real-Firestore-transaction caveat).
+    # No write happens between this check and the claim below, so this is
+    # the single point where a double-approve (or a retry after a claimed-
+    # but-unfinalized request) is caught (see module docstring for the
+    # real-Firestore-transaction caveat on the concurrent case).
     if request.get("status") != PENDING_APPROVAL:
         raise ApprovalError("not_pending", f"Refund request {request_id!r} is not pending approval")
 
@@ -159,10 +193,25 @@ def approve_refund(db, tenant_id: str, request_id: str, approver_id: str) -> Dic
     reason = request["reason"]
     reason_category = request["reason_category"]
 
-    # Execute: delegate the actual refund write to the requesting tenant's
-    # CommerceProvider (Task 7) instead of writing to "refunds" directly
-    # here. This mirrors, field for field, the shape the old (pre-provider)
-    # code wrote directly to "refunds":
+    # PHASE 1: Claim. Flips PENDING_APPROVAL -> APPROVING before the
+    # possibly-external execute_refund() call below, so a retry that
+    # re-enters this function (and re-reads status via _get_request) is
+    # refused by the not_pending check above instead of re-executing the
+    # refund.
+    claimed_request = dict(request)
+    claimed_request.update(
+        {
+            "status": APPROVING,
+            "approver_id": approver_id,
+            "claimed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    doc_ref.set(claimed_request)
+
+    # PHASE 2: Execute. Delegate the actual refund write to the requesting
+    # tenant's CommerceProvider (Task 7) instead of writing to "refunds"
+    # directly here. This mirrors, field for field, the shape the old
+    # (pre-provider) code wrote directly to "refunds":
     #   - "items" gets the same per-item "refund_amount" the old code
     #     computed (item.get("price", 0) * item.get("qty", 1)) baked in
     #     before being handed to the provider — that enrichment is specific
@@ -191,28 +240,39 @@ def approve_refund(db, tenant_id: str, request_id: str, approver_id: str) -> Dic
     items_with_refund_amount = [{**item, "refund_amount": item.get("price", 0) * item.get("qty", 1)} for item in items]
 
     provider = get_provider(tenant_id)
-    result = provider.execute_refund(
-        tenant_id=tenant_id,
-        order_id=order_id,
-        customer_id=user_id,
-        items=items_with_refund_amount,
-        amount=refund_amount,
-        reason=reason,
-        reason_category=reason_category,
-    )
+    try:
+        result = provider.execute_refund(
+            tenant_id=tenant_id,
+            order_id=order_id,
+            customer_id=user_id,
+            items=items_with_refund_amount,
+            amount=refund_amount,
+            reason=reason,
+            reason_category=reason_category,
+        )
+    except Exception:
+        # No evidence money moved — release the claim so a human can retry
+        # cleanly instead of the request being stuck in APPROVING forever.
+        doc_ref.set(request)
+        raise
+
     if not result.success:
+        # Explicit failure result (not an exception) — same reasoning:
+        # release the claim.
+        doc_ref.set(request)
         raise ApprovalError("refund_execution_failed", result.message)
 
     refund_id = result.refund_id
 
-    # Mark the approval request itself as APPROVED. The refund write above
-    # (scanned by customer_support_mas's duplicate-refund detection) IS the
-    # complete "mark items refunded" side effect — nothing else to do.
-    updated_request = dict(request)
+    # PHASE 3: Finalize. If THIS write fails, the request is left in
+    # APPROVING — refund executed, not yet marked APPROVED. That is now a
+    # safe, detectable inconsistency (find_stuck_approving() surfaces it)
+    # rather than a double-refund risk, since the claim above already
+    # blocks any retry from reaching execute_refund() again.
+    updated_request = dict(claimed_request)
     updated_request.update(
         {
             "status": APPROVED,
-            "approver_id": approver_id,
             "approved_at": datetime.now(timezone.utc).isoformat(),
             "refund_id": refund_id,
         }
@@ -279,3 +339,52 @@ def expire_stale(db, tenant_id: str) -> int:
         flipped += 1
 
     return flipped
+
+
+def find_stuck_approving(db, tenant_id: str, older_than_minutes: int = 5) -> List[Dict[str, Any]]:
+    """Return this tenant's refund_requests stuck in APPROVING for longer
+    than `older_than_minutes`.
+
+    APPROVING is the safe-but-incomplete state approve_refund() leaves
+    behind when provider.execute_refund() succeeded (money moved) but the
+    final status-update write failed before marking the request APPROVED
+    (see approve_refund's claim/execute/finalize docstring). A request
+    staying APPROVING briefly (mid-call) is normal; one still APPROVING
+    minutes later means the finalize write never landed and needs an
+    operator's attention.
+
+    Detection only — this does not attempt automatic recovery. Safely
+    completing the finalize write requires knowing the refund_id that was
+    generated, which isn't necessarily recoverable from this document alone
+    once the finalize write is what would have carried it; a human should
+    cross-reference the provider's own refund record (`refunds` collection,
+    or the equivalent on a non-Firestore provider) before manually
+    resolving one of these. Not yet wired into a scheduled job — same
+    situation as expire_stale() above — surfaced here for an operator or a
+    future reconciliation job to consume.
+    """
+    now = datetime.now(timezone.utc)
+    stuck = []
+
+    for snap in db.collection(REFUND_REQUESTS_COLLECTION).stream():
+        request = snap.to_dict()
+        if request.get("status") != APPROVING or request.get("tenant_id") != tenant_id:
+            continue
+
+        claimed_at_str = request.get("claimed_at")
+        if not claimed_at_str:
+            continue
+
+        claimed_at = datetime.fromisoformat(claimed_at_str)
+        if claimed_at.tzinfo is None:
+            claimed_at = claimed_at.replace(tzinfo=timezone.utc)
+
+        age_minutes = (now - claimed_at).total_seconds() / 60
+        if age_minutes < older_than_minutes:
+            continue
+
+        entry = dict(request)
+        entry["request_id"] = snap.id
+        stuck.append(entry)
+
+    return stuck

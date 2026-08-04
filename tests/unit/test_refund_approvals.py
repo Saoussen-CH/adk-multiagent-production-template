@@ -60,9 +60,11 @@ import uuid
 import pytest
 
 from backend.app.refund_approvals import (
+    APPROVING,
     ApprovalError,
     approve_refund,
     expire_stale,
+    find_stuck_approving,
     list_pending,
     reject_refund,
 )
@@ -230,6 +232,155 @@ def test_approve_executes_once():
         approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
     assert exc.value.code == "not_pending"
     assert len(list(db.collection("refunds").stream())) == 1  # still exactly one
+
+
+def test_approve_releases_claim_when_execute_refund_returns_failure(monkeypatch):
+    """If provider.execute_refund() returns a failure result (not an
+    exception), no money moved — the claim must be released back to
+    PENDING_APPROVAL so a human can retry cleanly, not left stuck."""
+    from customer_support_mas.providers.models import RefundResult
+
+    db = _active_db_client()
+    rid = _stage(db)
+
+    class _FailingProvider:
+        def execute_refund(self, **kwargs):
+            return RefundResult(success=False, message="simulated provider failure")
+
+    monkeypatch.setattr("backend.app.refund_approvals.get_provider", lambda tenant_id: _FailingProvider())
+
+    with pytest.raises(ApprovalError) as exc:
+        approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
+
+    assert exc.value.code == "refund_execution_failed"
+    assert list(db.collection("refunds").stream()) == []
+    request_doc = db.collection("refund_requests").document(rid).get().to_dict()
+    assert request_doc["status"] == "PENDING_APPROVAL"
+    # The claim (approver_id, claimed_at) must be fully released, not left
+    # dangling on an otherwise-pending request.
+    assert "approver_id" not in request_doc
+    assert "claimed_at" not in request_doc
+
+
+def test_approve_releases_claim_when_execute_refund_raises(monkeypatch):
+    """Same as above but for an actual exception (e.g. a network error
+    calling a real provider's API) instead of a clean failure result."""
+    db = _active_db_client()
+    rid = _stage(db)
+
+    class _ExplodingProvider:
+        def execute_refund(self, **kwargs):
+            raise RuntimeError("simulated network failure")
+
+    monkeypatch.setattr("backend.app.refund_approvals.get_provider", lambda tenant_id: _ExplodingProvider())
+
+    with pytest.raises(RuntimeError):
+        approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
+
+    assert list(db.collection("refunds").stream()) == []
+    request_doc = db.collection("refund_requests").document(rid).get().to_dict()
+    assert request_doc["status"] == "PENDING_APPROVAL"
+
+    # The claim was fully released — a normal approval afterward must still
+    # work (not permanently wedged by the failed attempt). Restore the real
+    # provider first; the exploding one above was only for this attempt.
+    monkeypatch.undo()
+    result = approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
+    assert result["status"] == "approved"
+
+
+def test_finalize_write_failure_leaves_a_safe_approving_state_not_a_double_refund(monkeypatch):
+    """The core regression test for the claim/execute/finalize design: if
+    the final status-update write fails AFTER execute_refund() already
+    succeeded, the request must be left in APPROVING (money moved, not yet
+    marked complete) rather than reverting to PENDING_APPROVAL — reverting
+    would let a retry call execute_refund() a second time and genuinely
+    double-refund the customer, which is exactly the failure mode
+    dev.to/hadywalied's refund-agent article warns about.
+    """
+    from tests.mock_firestore import MockDocument
+
+    db = _active_db_client()
+    rid = _stage(db)
+
+    original_set = MockDocument.set
+    call_count = {"n": 0}
+
+    def flaky_set(self, data):
+        if self._parent_collection_name == "refund_requests" and self._doc_id == rid:
+            call_count["n"] += 1
+            if call_count["n"] == 2:  # 1st call = claim, 2nd call = finalize
+                raise RuntimeError("simulated transient Firestore failure on finalize")
+        original_set(self, data)
+
+    monkeypatch.setattr(MockDocument, "set", flaky_set)
+
+    with pytest.raises(RuntimeError):
+        approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
+
+    monkeypatch.setattr(MockDocument, "set", original_set)
+
+    # The refund WAS executed (money moved) before the finalize write failed.
+    refunds = list(db.collection("refunds").stream())
+    assert len(refunds) == 1
+
+    # The request is left in APPROVING, not reverted to PENDING_APPROVAL —
+    # this is the property that prevents a double refund on retry.
+    request_doc = db.collection("refund_requests").document(rid).get().to_dict()
+    assert request_doc["status"] == APPROVING
+    assert request_doc["approver_id"] == "approver-1"
+
+    # A retry must be refused, and critically must NOT execute a second
+    # refund — this is the money-safety invariant the whole fix exists for.
+    with pytest.raises(ApprovalError) as exc:
+        approve_refund(db, TEST_TENANT_ID, rid, approver_id="approver-1")
+    assert exc.value.code == "not_pending"
+    assert len(list(db.collection("refunds").stream())) == 1  # still exactly one
+
+
+def test_find_stuck_approving_only_returns_old_enough_same_tenant_approving_requests():
+    db = _active_db_client()
+    from datetime import datetime, timedelta, timezone
+
+    old_claimed_at = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    fresh_claimed_at = datetime.now(timezone.utc).isoformat()
+
+    stuck_rid = _stage(db, order_id="ORD-11111")
+    db.collection("refund_requests").document(stuck_rid).set(
+        {
+            **db.collection("refund_requests").document(stuck_rid).get().to_dict(),
+            "status": "APPROVING",
+            "claimed_at": old_claimed_at,
+        }
+    )
+
+    fresh_rid = _stage(db, order_id="ORD-22222")
+    db.collection("refund_requests").document(fresh_rid).set(
+        {
+            **db.collection("refund_requests").document(fresh_rid).get().to_dict(),
+            "status": "APPROVING",
+            "claimed_at": fresh_claimed_at,
+        }
+    )
+
+    pending_rid = _stage(db, order_id="ORD-33333")  # still PENDING_APPROVAL, no claimed_at
+
+    other_tenant_rid = _stage(db, order_id="ORD-44444", tenant_id="other-tenant")
+    db.collection("refund_requests").document(other_tenant_rid).set(
+        {
+            **db.collection("refund_requests").document(other_tenant_rid).get().to_dict(),
+            "status": "APPROVING",
+            "claimed_at": old_claimed_at,
+        }
+    )
+
+    stuck = find_stuck_approving(db, TEST_TENANT_ID, older_than_minutes=5)
+
+    stuck_ids = [s["request_id"] for s in stuck]
+    assert stuck_ids == [stuck_rid]
+    assert fresh_rid not in stuck_ids
+    assert pending_rid not in stuck_ids
+    assert other_tenant_rid not in stuck_ids
 
 
 def test_approve_not_found():
